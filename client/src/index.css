@@ -2,8 +2,14 @@
 
 /* v4 这里的 @theme 块相当于以前的 tailwind.config.js */
 @theme {
-  --color-geo-dark: #1a1d21;  /* 深色底板 */
-  --color-geo-panel: #2b3035; /* 面板背景 */
+  /* 炫酷深色主题 */
+  --color-geo-dark: #0f172a;      /* 深蓝灰色背景 */
+  --color-geo-panel: #1e293b;     /* 面板深蓝灰 */
+  --color-geo-accent: #3b82f6;    /* 亮蓝色强调色 */
+  --color-geo-secondary: #60a5fa; /* 次要蓝色 */
+  --color-geo-border: #334155;    /* 边框深蓝灰 */
+  --color-geo-text-primary: #f1f5f9;  /* 主要文字 */
+  --color-geo-text-secondary: #cbd5e1; /* 次要文字 */
 }
 
 /* ...其他样式... */

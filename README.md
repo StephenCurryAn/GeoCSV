@@ -4,7 +4,7 @@
 本项目是一个类似IDE的WebGIS分析工具，支持用户上传数据、在表格中通过公式调用后端地理模型，并实现地图与表格的实时联动。
 
 ## 技术栈
-- 前端：React 18 + TypeScript + Vite + Tailwind CSS + Ant Design
+- 前端：React 18 + TypeScript + Vite + Tailwind CSS(v4) + Ant Design
 - 地图：MapLibre GL JS
 - 表格：AG Grid React
 - 后端：Node.js + Express + TypeScript
