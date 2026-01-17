@@ -4,7 +4,11 @@ import path from 'path';
 
 // 定义上传目录路径
 // __dirname 是当前代码文件所在的绝对路径
-const uploadDir = path.join(__dirname, '../../../uploads');
+// const uploadDir = path.join(__dirname, '../../../uploads');
+
+// 使用 process.cwd() 获取项目根目录，确保上传目录在项目根目录下
+// 这里指的是server这个文件夹目录下(在哪敲的npm run dev（后端），就在哪建uploads文件夹)
+const uploadDir = path.join(process.cwd(), 'uploads');
 
 // 检查上传目录是否存在，如果不存在则创建
 // { recursive: true }如果父级目录不存在，顺便把父级目录也一并创建出来;
@@ -12,8 +16,6 @@ const uploadDir = path.join(__dirname, '../../../uploads');
 if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });
     console.log(`📁 上传目录已创建: ${uploadDir}`);
-} else {
-    console.log(`📁 上传目录已存在: ${uploadDir}`);
 }
 
 // 配置 Multer 存储选项
@@ -25,14 +27,14 @@ const storage = multer.diskStorage({
     // 可以通过 req.body 拿到附带的其他表单数据（例如上传者的 ID）
     // file (File): 正在处理的那个文件对象（包含文件名、大小、MIME 类型等信息）
     // cb (Callback): 回调函数。这是 Multer 给你的一个“开关”，你必须调用它，Multer 才会继续下一步
-    destination: function (req, file, cb) {
+    destination: function (req: Express.Request, file: Express.Multer.File, cb: (error: Error | null, path: string) => void) {
         // 第一个参数 null：代表没有错误
         // 如果你传了一个 new Error('磁盘满了')，上传就会终止
         // 第二个参数 uploadDir：代表目标文件夹路径
         cb(null, uploadDir);
     },
     // 设置保存的文件名，保持原始文件名并解决中文乱码问题
-    filename: function (req, file, cb) {
+    filename: function (req: Express.Request, file: Express.Multer.File, cb: (error: Error | null, filename: string) => void) {
         // 使用 Buffer 转换解决中文文件名乱码问题
         // Buffer.from(file.originalname, 'latin1')告诉 Node.js，
         // “我知道你刚才把这一串二进制数据当成 latin1 读错了。
@@ -41,8 +43,11 @@ const storage = multer.diskStorage({
         // 然后，.toString('utf8') 再把这个最原始的二进制字节流，
         // 按照正确的 utf8 编码格式重新读一遍，变回正确的中文字符串。
         const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
-        // 告诉 Multer：“没问题（null），请把这个文件命名为刚才修复好的 originalName 存在硬盘里。”
-        cb(null, originalName);
+        // 添加时间戳
+        const timestamp = Date.now();
+        const filename = `${originalName}_${timestamp}`;
+        // 告诉 Multer：“没问题（null），请把这个文件命名为刚才修复好的 filename 存在硬盘里。”
+        cb(null, filename);
     }
 });
 
@@ -55,7 +60,7 @@ const fileFilter = (req: Express.Request, file: Express.Multer.File, cb: multer.
     const fileExtension = path.extname(file.originalname).toLowerCase();
     
     // 定义允许的文件类型
-    const allowedExtensions = ['.json', '.geojson', '.csv', '.shp'];
+    const allowedExtensions = ['.json', '.geojson', '.csv', '.shp' ,'.zip'];
     
     // 检查文件扩展名是否在允许列表中
     if (allowedExtensions.includes(fileExtension)) {

@@ -1,6 +1,10 @@
 import { Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
+// 因为 Multer 存硬盘的代码和控制器处理数据的代码，
+// 不在同一个文件里面，所以不好将路径这个参数传递，只好通过 req 的方式，所以需要req
+// Multer存到硬盘之后，但是控制器还不知道这个文件路径是什么，所以需要req
+// 先进行Multer存硬盘这个步骤，然后进行控制器处理数据这个步骤，并返回回复
 
 /**
  * 文件上传控制器
@@ -60,12 +64,15 @@ export const uploadFile = async (req: Request, res: Response) => {
         }
 
         // 成功响应
+        // 这里要和前端的 geoService.ts 中的 UploadResponse 接口对应
         res.status(200).json({
             code: 200,
             message: '文件上传并解析成功',
             data: {
                 filename: req.file.originalname,  // 返回原始文件名
-                geoJson: parsedData              // 返回解析后的 GeoJSON 数据
+                geoJson: parsedData,         // 返回解析后的 GeoJSON 数据
+                fileSize: req.file.size, // 文件大小
+                fileType: fileExtension // 文件类型
             }
         });
 
