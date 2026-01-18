@@ -81,12 +81,23 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
   // 标题渲染逻辑：实现"右侧对勾"效果
   const titleRender = (node: any) => {
     const isSelected = selectedKeys.includes(node.key);
+    const icon = getIcon(node);
     return (
-      <div className="flex items-center justify-between w-full pr-2 group">
-        <span className="text-gray-600 group-hover:text-black transition-colors">
+      // 外层容器：Flex 布局，垂直居中
+      <div className="flex items-center w-full pr-2 group h-8">
+        
+        {/* 左侧：图标区 (固定宽度或由内容撑开，加个 margin-right) */}
+        <span className="mr-2 flex items-center justify-center shrink-0 min-w-5">
+          {icon}
+        </span>
+
+        {/* 中间：文件名 (flex-1 占据剩余空间，防止文字过长遮挡图标) */}
+        <span className={`flex-1 truncate transition-colors ${isSelected ? 'text-blue-500 font-medium' : 'text-gray-500 group-hover:text-blue-400'}`}>
           {node.title}
         </span>
-        {isSelected && <CheckOutlined className="text-blue-400 text-xs" />}
+
+        {/* 右侧：选中对勾 */}
+        {isSelected && <CheckOutlined className="text-blue-500 text-sm ml-2" />}
       </div>
     );
   };
@@ -127,15 +138,6 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
 
         // 4. 更新树数据 (Immutable update)
         setTreeData(prev => {
-          // // 找到根节点在数组中的索引
-          // const rootIndex = prev.findIndex(node => node.key === 'root');
-          // // findIndex 找到了就是 0（或其他数字），找不到就是 -1。
-          // if (rootIndex === -1) return prev;
-
-          // 浅拷贝整个数组
-          // 如果运行“prev === newTreeData”，结果是 false，说明我们创建了一个新数组
-          // ... 展开的时候，严格保留了所有元素原本的顺序（索引位置）
-          // const newTreeData = [...prev];
           const newData = [...prev];
           if (newData.length > 0 && newData[0].type === 'folder') {
              if (!newData[0].children) newData[0].children = [];
@@ -144,35 +146,6 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
              newData.push(newFileNode);
           }
           return newData;
-
-          // // 浅拷贝根节点对象 (为了不修改原对象)
-          // const rootNode = { ...newTreeData[rootIndex] };
-          
-          // // 浅拷贝 children 数组 (如果 undefined 则初始化为空)
-          // const children = rootNode.children ? [...rootNode.children] : [];
-
-          // // 查重逻辑：精确匹配
-          // const existingIndex = children.findIndex(
-          //   // child => child.rawFileName是箭头函数，表示对每个child进行判断 
-          //   // 其中第一个child是children数组里的每个元素（相当于箭头函数的参数定义）
-          //   child => child.rawFileName === response.data?.fileName
-          // );
-
-          // if (existingIndex !== -1) {
-          //   // 如果存在，替换它
-          //   children[existingIndex] = newFileNode;
-          // } else {
-          //   // 如果不存在，追加它
-          //   children.push(newFileNode);
-          // }
-
-          // // 将新的 children 赋值回根节点副本
-          // rootNode.children = children;
-          
-          // // 将新的根节点放回数组
-          // newTreeData[rootIndex] = rootNode;
-
-          // return newTreeData;
         });
 
         message.success(`${targetFile.name} 上传成功！`);
@@ -212,7 +185,7 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
             size="small" 
             type="primary"
             icon={<FolderAddOutlined />}
-            className="bg-blue-600 hover:bg-blue-500 border-none text-xs shadow-md"
+            className="text-gray-200! bg-blue-600 hover:bg-blue-500 border-none text-xs shadow-md"
           >
             新建
           </Button>
@@ -227,7 +200,7 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
               type="primary" 
               size="small" 
               icon={<CloudUploadOutlined />}
-              className="bg-blue-600 hover:bg-blue-500 border-none text-xs shadow-md"
+              className="text-gray-200! bg-blue-600 hover:bg-blue-500 border-none text-xs shadow-md"
             >
               上传
             </Button>
@@ -242,9 +215,9 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
           .dark-tree .ant-tree-node-content-wrapper { 
             display: flex !important; 
             align-items: center;
-            color: rgba(255, 255, 255, 0.85); 
             transition: all 0.3s;
             height: 32px !important; /* 增加一点行高，让点击区域更大 */
+            padding: 0 4px !important;
           }
           .dark-tree .ant-tree-node-content-wrapper:hover { 
             background-color: rgba(255, 255, 255, 0.08) !important; 
@@ -285,12 +258,12 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
           <Tree
             className="dark-tree bg-transparent"
             blockNode // 这个很重要，让整行都能点击
-            showIcon={true} // 确保这里是 true
+            showIcon={false} 
             defaultExpandAll
             selectedKeys={selectedKeys}
             onSelect={handleSelect}
             treeData={treeData}
-            icon={getIcon}
+            // icon={getIcon}
             titleRender={titleRender}
             // 稍微美化一下展开的小三角
             switcherIcon={({ expanded }) => (
