@@ -64,6 +64,7 @@ class GeoService {
           // 重要：当使用 FormData 时，不要手动设置 Content-Type
           // 浏览器会自动设置为 multipart/form-data 并添加正确的边界
           // 'Content-Type': 'multipart/form-data', // 这行会被浏览器忽略
+          'Content-Type': undefined,
         },
         // 上传大文件时显示进度（可选功能，后续可扩展）
         onUploadProgress: (progressEvent) => {

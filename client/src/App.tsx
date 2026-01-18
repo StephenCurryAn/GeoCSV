@@ -23,6 +23,7 @@ function App() {
   // 用于存储已上传的文件数据
   const [uploadedFilesData, setUploadedFilesData] = React.useState<Record<string, any>>({});
 
+  // 回调函数，后面根据需要再写相关的功能，传给表格，地图组件等之类的
   // 处理数据加载的回调函数
   const handleDataLoaded = (fileName: string, data: any) => {
     console.log(`文件 ${fileName} 加载成功`, data);

@@ -29,6 +29,10 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
   // 状态管理
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   // TreeNode[]表示 TreeNode 类型的数组
+
+  // 对于这个初始化的树，如果使用...展开为数组，展开后数组里只有 2 个元素：[root节点, sample1节点]
+  // 浅拷贝，顶层遍历，children 还是引用类型，依然被包裹在这个对象内部，并没有被拿出来
+  // 如果想通过 ... 把树形结构变成一个扁平的一维数组，需要写一个递归函数来实现
   const [treeData, setTreeData] = useState<TreeNode[]>([
     {
       key: 'root',
@@ -67,15 +71,15 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
   // 图标逻辑：根据文件类型返回不同颜色图标
   const getIcon = (props: any) => {
     if (props.type === 'folder') {
-      return <FolderFilled className="text-yellow-500 text-lg" />;
+      return <FolderFilled className="text-yellow-500! text-lg" />;
     }
     const ext = (props.title || '').toLowerCase().split('.').pop();
     switch (ext) {
-      case 'csv': return <TableOutlined className="text-green-400 " />;
-      case 'xlsx': return <TableOutlined className="text-green-400" />;
-      case 'json': return <FileImageOutlined className="text-yellow-400" />;
-      case 'geojson': return <FileImageOutlined className="text-yellow-400" />;
-      default: return <FileTextOutlined className="text-gray-400" />;
+      case 'csv': return <TableOutlined className="text-green-400! " />;
+      case 'xlsx': return <TableOutlined className="text-green-400!" />;
+      case 'json': return <FileImageOutlined className="text-gray-400!" />;
+      case 'geojson': return <FileImageOutlined className="text-gray-400!" />;
+      default: return <FileTextOutlined className="text-gray-400!" />;
     }
   };
   // 标题渲染逻辑：实现"右侧对勾"效果
@@ -132,16 +136,21 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
           title: response.data.fileName, // 直接使用文件名，不加 emoji，由 icon 属性控制
           type: 'file',
           rawFileName: response.data.fileName,
-          isLeaf: true,
-          icon: getIcon(response.data.fileName),
+          isLeaf: true
         };
 
         // 4. 更新树数据 (Immutable update)
         setTreeData(prev => {
+          // 创建副本（Copy）,避免直接修改状态，“浅拷贝”
           const newData = [...prev];
+
           if (newData.length > 0 && newData[0].type === 'folder') {
+            
+            // 如果根节点没有 children 属性，先初始化为空数组，以防报错 
+            // 然后将新文件节点添加到根节点的 children 中
              if (!newData[0].children) newData[0].children = [];
              newData[0].children.push(newFileNode);
+
           } else {
              newData.push(newFileNode);
           }
@@ -162,11 +171,22 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
   };
 
   // 选中逻辑
+  // 这里用info作为参数是因为：
+  // “点击” (Select) 这个动作包含的信息很多，不仅仅是“点了谁”
+  // Ant Design 把它们打包在 info 对象里，是为了扩展性。
+  // info 对象里通常包含：
+  // info.node: 点了谁（主角）；
+  // info.selected: 现在是不是选中状态（布尔值）；
+  // info.event: 一些原生事件对象（用于处理右键菜单、阻止冒泡等）；
+  // 以及其他一些辅助信息，方便你根据具体情况做不同的处理。
   const handleSelect = (keys: React.Key[], info: any) => {
     const key = keys[0] as string;
     if (!key) return;
     
-    setSelectedKeys([key]);
+    setSelectedKeys([key]); //改变状态，会触发组件重新渲染
+
+    // && onSelectFile，检查父组件 (App) 是否传了这个回调函数给我们
+    // onSelectFile(info.node.rawFileName)，把这个文件的原始文件名 (rawFileName) 扔给父组件
     if (info.node.type === 'file' && onSelectFile) {
       onSelectFile(info.node.rawFileName);
     }
