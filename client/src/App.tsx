@@ -14,21 +14,51 @@
 //   )
 // }
 
+import React from 'react';
 import './App.css';
 import MainLayout from './layouts/MainLayout';
+import LeftPanel from './features/workspace/components/LeftPanel';
 
 function App() {
+  // 用于存储已上传的文件数据
+  const [uploadedFilesData, setUploadedFilesData] = React.useState<Record<string, any>>({});
+
+  // 处理数据加载的回调函数
+  const handleDataLoaded = (fileName: string, data: any) => {
+    console.log(`文件 ${fileName} 加载成功`, data);
+    // 存储上传的文件数据
+    setUploadedFilesData(prev => ({
+      ...prev,
+      [fileName]: data
+    }));
+    // 这里可以更新地图和表格的数据
+    // 例如：setGridData(data.features || data.rows);
+    // 例如：setMapData(data);
+  };
+
+  // 处理文件选择
+  const handleSelectFile = (fileName: string) => {
+    console.log(`选择了文件: ${fileName}`);
+    // 检查是否是已上传的文件
+    if (uploadedFilesData[fileName]) {
+      // 如果是已上传的文件，使用之前上传的数据
+      console.log(`使用已上传的 ${fileName} 数据`, uploadedFilesData[fileName]);
+      // 这里可以更新地图和表格的数据
+      // 例如：setGridData(uploadedFilesData[fileName].features || uploadedFilesData[fileName].rows);
+      // 例如：setMapData(uploadedFilesData[fileName]);
+    } else {
+      // 如果是模拟的静态节点，暂时 log 输出
+      console.log(`该文件尚未上传或不可用: ${fileName}`);
+    }
+  };
+
   return (
     <MainLayout>
       {/* 左侧面板内容 - 资源管理器 */}
-      <div className="text-gray-300">
-        <p>左侧资源管理器内容区域</p>
-        <ul className="mt-4 space-y-2">
-          <li className="p-2 bg-geo-dark rounded">📁 项目文件夹</li>
-          <li className="p-2 bg-geo-dark rounded">📄 sample.csv</li>
-          <li className="p-2 bg-geo-dark rounded">📄 geo_data.geojson</li>
-        </ul>
-      </div>
+      <LeftPanel
+        onDataLoaded={handleDataLoaded}
+        onSelectFile={handleSelectFile}
+      />
 
       {/* 中间面板内容 - 数据透视表 */}
       <div className="text-gray-300">
@@ -53,4 +83,4 @@ function App() {
   )
 }
 
-export default App
+export default App;
