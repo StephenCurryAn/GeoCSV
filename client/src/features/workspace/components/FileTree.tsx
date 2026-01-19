@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Tree, Upload, Button, message, Empty } from 'antd'; // 引入 Empty 组件美化空状态
-import { FolderAddOutlined, CloudUploadOutlined, FileTextOutlined, FileImageOutlined, TableOutlined, FolderFilled, CheckOutlined} from '@ant-design/icons';
+import { FolderAddOutlined, CloudUploadOutlined, FileTextOutlined, FileImageOutlined, TableOutlined, FolderFilled, CheckOutlined, DownOutlined, RightOutlined} from '@ant-design/icons';
 import { geoService, type UploadResponse } from '../../../services/geoService';
 
 // 定义树节点的数据结构
@@ -15,6 +15,8 @@ export interface TreeNode {
   isLeaf?: boolean;
   rawFileName?: string; // 保存原始文件名，方便查找对比
 }
+
+
 
 // 实现子组件传导数据到父组件的接口
 export interface FileTreeProps {
@@ -141,20 +143,42 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
 
         // 4. 更新树数据 (Immutable update)
         setTreeData(prev => {
-          // 创建副本（Copy）,避免直接修改状态，“浅拷贝”
-          const newData = [...prev];
-
-          if (newData.length > 0 && newData[0].type === 'folder') {
-            
-            // 如果根节点没有 children 属性，先初始化为空数组，以防报错 
-            // 然后将新文件节点添加到根节点的 children 中
-             if (!newData[0].children) newData[0].children = [];
-             newData[0].children.push(newFileNode);
-
-          } else {
-             newData.push(newFileNode);
+          const currentSelectedKey = selectedKeys[0];
+          
+          // B. 判断是否需要放入文件夹
+          let shouldInsertToFolder = false;
+          
+          if (currentSelectedKey) {
+            // 只有当“选中了东西”且“选中的是文件夹”时，才放入文件夹
+            const targetNode = findNodeByKey(prev, currentSelectedKey);
+            if (targetNode && targetNode.type === 'folder') {
+              shouldInsertToFolder = true;
+            }
           }
-          return newData;
+          if (shouldInsertToFolder) {
+            // 放入选中的文件夹 (递归操作)
+            return insertNodeToTree(prev, currentSelectedKey, newFileNode);
+          } else {
+            // 放入根目录 (默认行为)
+            // 这里我们用 [...prev, newFileNode] 把它放到最后
+            // 或者用 [newFileNode, ...prev] 把它放到最前
+            return [...prev, newFileNode];
+          }
+          // // 之前的简单逻辑，直接放到根目录
+          // // 创建副本（Copy）,避免直接修改状态，“浅拷贝”
+          // const newData = [...prev];
+
+          // if (newData.length > 0 && newData[0].type === 'folder') {
+            
+          //   // 如果根节点没有 children 属性，先初始化为空数组，以防报错 
+          //   // 然后将新文件节点添加到根节点的 children 中
+          //    if (!newData[0].children) newData[0].children = [];
+          //    newData[0].children.push(newFileNode);
+
+          // } else {
+          //    newData.push(newFileNode);
+          // }
+          // return newData;
         });
 
         message.success(`${targetFile.name} 上传成功！`);
@@ -192,6 +216,49 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
     }
   };
 
+  // 根据 Key 查找节点的函数 (用于判断选中的是不是文件夹)
+  const findNodeByKey = (nodes: TreeNode[], key: string): TreeNode | null => {
+    for (const node of nodes) {
+      if (node.key === key) {
+        return node;
+      }
+      if (node.children) {
+        const found = findNodeByKey(node.children, key);
+        if (found) {
+          return found;
+        }
+      }
+    }
+    return null;
+  };
+
+  // 递归插入节点 (用于把文件塞进深层文件夹)
+  const insertNodeToTree = (nodes: TreeNode[], targetKey: string, newNode: TreeNode): TreeNode[] => {
+    // map 会返回一个新数组，每个节点都经过处理
+    return nodes.map((node) => {
+      // 找到了目标文件夹
+      if (node.key === targetKey) {
+        return {
+          ...node,
+          // 这里的逻辑是：保留原有的 children，追加 newNode
+          children: [...(node.children || []), newNode],
+          // 这一步是为了确保文件夹被标记为非叶子，且展开它（可选）
+          isLeaf: false, 
+        };
+      }
+      // 如果还没找到，继续往深处找
+      if (node.children) {
+        return {
+          ...node,
+          children: insertNodeToTree(node.children, targetKey, newNode),
+        };
+      }
+      // 如果当前节点既不是目标，也没有子节点（或者是死胡同），那就原封不动地返回它
+      // 节省内存和性能，不用重新创建对象，不用重新渲染
+      return node;
+    });
+  };
+  
   return (
     <div className="flex flex-col h-full bg-[#111827]">
       {/* 1. 工具栏区域 (Toolbar)
@@ -287,8 +354,28 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
             titleRender={titleRender}
             // 稍微美化一下展开的小三角
             switcherIcon={({ expanded }) => (
-              <span className="text-zinc-500">
-                {expanded ? '▼' : '▶'}
+              // <span className="text-zinc-500">
+              //   {/* {expanded ? '▼' : '▶'} */}
+              //   {expanded ? '⌄' : '>'}
+              // </span>
+              <span 
+                className="
+                  flex items-center justify-center
+                  text-gray-400       /* 1. 修改颜色：这里改成浅灰色，你可以改 */
+                  hover:text-white    /* 可选：鼠标悬停时变亮 */
+                  transition-transform duration-200 /* 可选：添加平滑过渡效果 */
+                "
+              >
+                {expanded ? (
+                  <DownOutlined 
+                    /* 2. 修改粗细：Ant Design 图标默认很细，通过加描边来实现“加粗”效果 */
+                    style={{ strokeWidth: '150', stroke: 'currentColor' }} 
+                  />
+                ) : (
+                  <DownOutlined 
+                    style={{ strokeWidth: '150', stroke: 'currentColor' }} 
+                  />
+                )}
               </span>
             )}
           />
