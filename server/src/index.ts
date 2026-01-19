@@ -2,10 +2,14 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors'; // 跨域资源共享
 import fileRoutes from './routes/fileRoutes'; // 导入文件路由
+import { connectDB } from './config/db'; // 导入数据库连接函数
 
 const app = express();
 // http://localhost:3000
 const PORT = 3000;
+
+// 连接数据库
+connectDB();
 
 // 1. 中间件配置
 app.use(cors()); // 允许前端跨域访问

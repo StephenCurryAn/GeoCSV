@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { uploadFile } from '../controllers/fileController';
+import { uploadFile, createFolder, getFileTree, getFileContent, renameNode, deleteNode } from '../controllers/fileController';
 import upload from '../utils/uploadConfig';
 
 /**
@@ -18,6 +18,42 @@ const router = Router();
 // single 方法表示只处理单个文件上传
 // http://localhost:3000/api/files/upload
 router.post('/upload', upload.single('file'), uploadFile);
+
+/**
+ * POST /folder
+ * 创建文件夹接口
+ * 接收 { name, parentId } 参数，在数据库中创建文件夹记录
+ */
+// http://localhost:3000/api/files/folder
+router.post('/folder', createFolder);
+
+/**
+ * GET /tree
+ * 获取文件树接口
+ * 查询数据库中的所有文件节点并返回树形结构
+ */
+// http://localhost:3000/api/files/tree
+router.get('/tree', getFileTree);
+
+/**
+ * GET /content/:id
+ * 🚨【修改 2】新增：获取文件内容接口
+ * 用于前端点击文件时，通过 ID 获取文件内容 (按需加载)
+ */
+// http://localhost:3000/api/files/content/65a1b2c3d4e5...
+router.get('/content/:id', getFileContent);
+
+/**
+ * PUT /:id
+ * 重命名文件或文件夹
+ */
+router.put('/:id', renameNode);
+
+/**
+ * DELETE /:id
+ * 删除文件或文件夹
+ */
+router.delete('/:id', deleteNode);
 
 // export default 的特权：在别的文件中引用的时候，可以随意起名
 // (在index.ts里引用的时候起名为fileRoutes)

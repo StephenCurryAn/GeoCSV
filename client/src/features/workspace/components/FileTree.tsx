@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
-import { Tree, Upload, Button, message, Empty } from 'antd'; // 引入 Empty 组件美化空状态
-import { FolderAddOutlined, CloudUploadOutlined, FileTextOutlined, FileImageOutlined, TableOutlined, FolderFilled, CheckOutlined, DownOutlined, RightOutlined} from '@ant-design/icons';
+import React, { useState, useEffect, useRef } from 'react';
+import { Tree, Upload, Button, message, Empty, Modal, Input, Dropdown, type MenuProps } from 'antd'; // 引入 Empty 组件美化空状态
+import { FolderAddOutlined, CloudUploadOutlined, FileTextOutlined, FileImageOutlined, TableOutlined, FolderFilled, CheckOutlined, DownOutlined, DeleteOutlined, EditOutlined, ExclamationCircleOutlined} from '@ant-design/icons';
 import { geoService, type UploadResponse } from '../../../services/geoService';
 
 // 定义树节点的数据结构
@@ -21,7 +21,7 @@ export interface TreeNode {
 // 实现子组件传导数据到父组件的接口
 export interface FileTreeProps {
   onDataLoaded: (fileName: string, data: any) => void;
-  onSelectFile?: (fileName: string) => void;
+  onSelectFile?: (fileName: string, fileId: string) => void;
 }
 
 // 创建文件树组件，并将FileTreeProps作为属性类型（制定规则）
@@ -30,44 +30,40 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
   
   // 状态管理
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  const [treeData, setTreeData] = useState<TreeNode[]>([]);
+
+  // 🆕 新增状态：控制重命名
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [editingValue, setEditingValue] = useState('');
+  const inputRef = useRef<any>(null); // 用于自动聚焦输入框
+
   // TreeNode[]表示 TreeNode 类型的数组
 
   // 对于这个初始化的树，如果使用...展开为数组，展开后数组里只有 2 个元素：[root节点, sample1节点]
   // 浅拷贝，顶层遍历，children 还是引用类型，依然被包裹在这个对象内部，并没有被拿出来
   // 如果想通过 ... 把树形结构变成一个扁平的一维数组，需要写一个递归函数来实现
-  const [treeData, setTreeData] = useState<TreeNode[]>([
-    {
-      key: 'root',
-      title: '项目根目录',
-      type: 'folder',
-      children: [
-        {
-          key: 'folder1',
-          title: '示例文件夹',
-          type: 'folder',
-          children: [
-            {
-              key: 'sample2',
-              title: '示例数据.geojson',
-              type: 'file',
-              isLeaf: true,
-              rawFileName: '示例数据.geojson',
-            }
-          ],
-          isLeaf: false,
-        }
-      ],
-      isLeaf: false,
-    },
-    {
-      key: 'sample1',
-      title: '示例数据.csv',
-      type: 'file',
-      isLeaf: true,
-      rawFileName: '示例数据.csv',
+
+  // 组件挂载时获取文件树数据
+  useEffect(() => {
+    fetchFileTree();
+  }, []);
+
+  // 从后端获取文件树数据
+  const fetchFileTree = async () => {
+    try {
+      const response = await fetch('http://localhost:3000/api/files/tree');
+      const result = await response.json();
+
+      if (result.code === 200) {
+        setTreeData(result.data);
+      } else {
+        throw new Error(result.message || '获取文件树失败');
+      }
+    } catch (error: any) {
+      console.error('获取文件树错误:', error);
+      message.error(`获取文件树失败: ${error.message}`);
     }
-  ]
-);
+  };
 
   // 辅助函数：根据文件名获取图标
   // 图标逻辑：根据文件类型返回不同颜色图标
@@ -87,27 +83,146 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
   // 标题渲染逻辑：实现"右侧对勾"效果
   const titleRender = (node: any) => {
     const isSelected = selectedKeys.includes(node.key);
+    const isEditing = editingKey === node.key; // 判断是否处于编辑模式
     const icon = getIcon(node);
-    return (
-      // 外层容器：Flex 布局，垂直居中
-      <div className="flex items-center w-full pr-2 group h-8">
-        
-        {/* 左侧：图标区 (固定宽度或由内容撑开，加个 margin-right) */}
-        <span className="mr-2 flex items-center justify-center shrink-0 min-w-5">
-          {icon}
-        </span>
 
-        {/* 中间：文件名 (flex-1 占据剩余空间，防止文字过长遮挡图标) */}
-        <span className={`flex-1 truncate transition-colors ${isSelected ? 'text-blue-500 font-medium' : 'text-gray-500 group-hover:text-blue-400'}`}>
-          {node.title}
-        </span>
+    // 定义右键菜单项
+    const menuItems: MenuProps['items'] = [
+        {
+            key: 'rename',
+            label: '重命名',
+            icon: <EditOutlined />,
+            onClick: () => {
+                setEditingKey(node.key);
+                setEditingValue(node.title); // 初始值为当前标题
+                // 稍微延迟一下聚焦，等待 DOM 渲染 Input
+                setTimeout(() => inputRef.current?.focus(), 100);
+            }
+        },
+        {
+            key: 'delete',
+            label: '删除',
+            icon: <DeleteOutlined />,
+            danger: true,
+            onClick: () => handleDelete(node.key, node.title)
+        }
+    ];
 
-        {/* 右侧：选中对勾 */}
-        {isSelected && <CheckOutlined className="text-blue-500 text-sm ml-2" />}
-      </div>
+    // 渲染内容
+    const content = (
+        <div 
+            className="flex items-center w-full pr-2 group h-8"
+            // 双击触发重命名
+            onDoubleClick={(e) => {
+                e.stopPropagation(); // 防止触发展开折叠
+                setEditingKey(node.key);
+                setEditingValue(node.title);
+            }}
+        >
+            <span className="mr-2 flex items-center justify-center shrink-0 min-w-5">
+                {icon}
+            </span>
+
+            {/* 编辑模式 vs 浏览模式 */}
+            {isEditing ? (
+                <Input
+                    ref={inputRef}
+                    size="small"
+                    value={editingValue}
+                    onChange={(e) => setEditingValue(e.target.value)}
+                    onPressEnter={() => handleRenameSave(node.key)}
+                    onBlur={() => {
+                         // 失去焦点时，保存还是取消？通常是保存。
+                         // 如果不想自动保存，可以写 setEditingKey(null)
+                         handleRenameSave(node.key); 
+                    }}
+                    onClick={(e) => e.stopPropagation()} // 防止点击输入框时触发树节点的选中
+                    className="flex-1 h-6 text-xs"
+                />
+            ) : (
+                <span className={`flex-1 truncate transition-colors ${isSelected ? 'text-blue-500 font-medium' : 'text-gray-500 group-hover:text-blue-400'}`}>
+                    {node.title}
+                </span>
+            )}
+
+            {isSelected && !isEditing && <CheckOutlined className="text-blue-500 text-sm ml-2" />}
+        </div>
     );
+    // 如果正在编辑，不需要右键菜单（或者你可以保留）
+    if (isEditing) {
+        return content;
+    }
+
+    // 使用 Dropdown 实现右键菜单
+    return (
+        <Dropdown menu={{ items: menuItems }} trigger={['contextMenu']}>
+            {content}
+        </Dropdown>
+    );
+
+    // return (
+    //   // 外层容器：Flex 布局，垂直居中
+    //   <div className="flex items-center w-full pr-2 group h-8">
+        
+    //     {/* 左侧：图标区 (固定宽度或由内容撑开，加个 margin-right) */}
+    //     <span className="mr-2 flex items-center justify-center shrink-0 min-w-5">
+    //       {icon}
+    //     </span>
+
+    //     {/* 中间：文件名 (flex-1 占据剩余空间，防止文字过长遮挡图标) */}
+    //     <span className={`flex-1 truncate transition-colors ${isSelected ? 'text-blue-500 font-medium' : 'text-gray-500 group-hover:text-blue-400'}`}>
+    //       {node.title}
+    //     </span>
+
+    //     {/* 右侧：选中对勾 */}
+    //     {isSelected && <CheckOutlined className="text-blue-500 text-sm ml-2" />}
+    //   </div>
+    // );
   };
 
+  const handleRenameSave = async (key: string) => {
+    if (!editingValue.trim()) {
+        message.warning('名称不能为空');
+        setEditingKey(null);
+        return;
+    }
+    try {
+        await geoService.renameNode(key, editingValue);
+        message.success('重命名成功');
+        setEditingKey(null);
+        fetchFileTree(); // 刷新树以获取最新状态
+    } catch (error: any) {
+        message.error(error.message);
+        // 即使失败也要退出编辑模式，或者保持编辑模式让用户修改
+        // 这里选择保持编辑模式
+        inputRef.current?.focus();
+    }
+  };
+
+  // 🆕 新增：处理删除
+  const handleDelete = (key: string, title: string) => {
+    Modal.confirm({
+        title: '确认删除',
+        icon: <ExclamationCircleOutlined />,
+        content: `确定要删除 "${title}" 吗？如果是文件夹，里面的内容也会被删除。`,
+        okText: '删除',
+        okType: 'danger',
+        cancelText: '取消',
+        onOk: async () => {
+            try {
+                await geoService.deleteNode(key);
+                message.success('删除成功');
+                // 如果删除的是当前选中的文件，清空选中状态
+                if (selectedKeys.includes(key)) {
+                    setSelectedKeys([]);
+                }
+                fetchFileTree(); // 刷新树
+            } catch (error: any) {
+                message.error(error.message);
+            }
+        }
+    });
+  };
 
   /**
    * 自定义上传请求
@@ -121,7 +236,22 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
     const targetFile = file as File; // 类型断言，告诉 TypeScript 这个 file 是浏览器的 File 对象
 
     try {
-      const response: UploadResponse = await geoService.uploadGeoData(targetFile);
+      // 🚨【关键修改 1】上传前先计算 parentId
+      // 逻辑和新建文件夹一模一样：看看当前选中的是不是文件夹
+      const currentSelectedKey = selectedKeys[0];
+      let targetParentId = undefined; // 默认根目录
+
+      if (currentSelectedKey) {
+        const targetNode = findNodeByKey(treeData, currentSelectedKey);
+        // 如果选中了文件夹，就以此为父ID
+        if (targetNode && targetNode.type === 'folder') {
+          targetParentId = currentSelectedKey;
+        }
+      }
+      // 🚨【关键修改 2】把 targetParentId 传给 uploadGeoData
+      // 假设你的 geoService 签名是 uploadGeoData(file, parentId?)
+
+      const response: UploadResponse = await geoService.uploadGeoData(targetFile, targetParentId);
       // hide();
 
       if (response.code === 200 && response.data) {
@@ -134,7 +264,7 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
 
         // 3. 准备新节点对象（更新）
         const newFileNode: TreeNode = {
-          key: `${Date.now()}`, // key 保持唯一
+          key: response.data._id, // key 保持唯一
           title: response.data.fileName, // 直接使用文件名，不加 emoji，由 icon 属性控制
           type: 'file',
           rawFileName: response.data.fileName,
@@ -184,6 +314,11 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
         message.success(`${targetFile.name} 上传成功！`);
         // 选中新上传的文件
         setSelectedKeys([newFileNode.key]);
+
+        // 上传成功后，重新获取文件树数据以同步后端数据库状态
+        setTimeout(() => {
+          fetchFileTree();
+        }, 500); // 延迟执行，确保后端有时间处理数据
       } else {
         throw new Error(response.message || '上传未返回有效数据');
       }
@@ -212,7 +347,13 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
     // && onSelectFile，检查父组件 (App) 是否传了这个回调函数给我们
     // onSelectFile(info.node.rawFileName)，把这个文件的原始文件名 (rawFileName) 扔给父组件
     if (info.node.type === 'file' && onSelectFile) {
-      onSelectFile(info.node.rawFileName);
+      // 🚨【修改这里】兼容逻辑：
+      // 1. 刚上传时，有 rawFileName
+      // 2. 从数据库加载时，只有 title (它就是文件名)
+      // 所以：如果 rawFileName 没值，就取 title
+      const fileName = info.node.rawFileName || info.node.title;
+      
+      onSelectFile(fileName, key);
     }
   };
 
@@ -259,6 +400,85 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
     });
   };
   
+  // 新建文件夹处理函数
+  const handleCreateFolder = async () => {
+    const folderName = prompt('请输入文件夹名称:');
+    if (!folderName) return;
+
+    try {
+      // 获取当前选中的节点
+      const currentSelectedKey = selectedKeys[0];
+      let parentId = null;
+
+      // 如果当前选中的是一个文件夹，则将新文件夹创建在该文件夹内
+      if (currentSelectedKey) {
+        const targetNode = findNodeByKey(treeData, currentSelectedKey);
+        if (targetNode && targetNode.type === 'folder') {
+          parentId = currentSelectedKey;
+        }
+      }
+
+      // 调用后端API创建文件夹
+      const response = await fetch('http://localhost:3000/api/files/folder', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: folderName,
+          parentId: parentId
+        })
+      });
+
+      const result = await response.json();
+
+      if (result.code === 200) {
+        // 创建成功，更新树数据
+        const newFolderNode: TreeNode = {
+          key: result.data._id, // 使用后端返回的ID
+          title: folderName,
+          type: 'folder',
+          isLeaf: false,
+          children: [] // 文件夹初始化要有 children
+        };
+
+        message.success('文件夹创建成功！');
+
+        // ✅ 新增：使用 setTreeData 把新文件夹立即显示出来 (消除警告)
+        setTreeData(prev => {
+          // 这里的逻辑和上传文件成功后的逻辑一样
+          if (parentId) {
+            // 如果是在某个父文件夹下创建，递归插入
+            return insertNodeToTree(prev, parentId, newFolderNode);
+          } else {
+            // 如果是根目录，直接追加
+            return [...prev, newFolderNode];
+          }
+        });
+
+        // 创建成功后，重新获取文件树数据以同步后端数据库状态
+        setTimeout(() => {
+          fetchFileTree();
+        }, 500); // 延迟执行，确保后端有时间处理数据
+      } else {
+        throw new Error(result.message || '创建文件夹失败');
+      }
+    } catch (error: any) {
+      console.error('创建文件夹错误:', error);
+      message.error(`创建文件夹失败: ${error.message}`);
+    }
+  };
+
+  // 处理树点击事件（用于取消选中）
+  const handleTreeClick = (e: React.MouseEvent) => {
+    // 检查是否点击了树节点之外的空白区域
+    // 如果点击的是树的背景而非具体的节点，则取消选中
+    if ((e.target as HTMLElement).closest('.ant-tree') &&
+        !(e.target as HTMLElement).closest('.ant-tree-treenode')) {
+      setSelectedKeys([]); // 清空选中状态
+    }
+  };
+
   return (
     <div className="flex flex-col h-full bg-[#111827]">
       {/* 1. 工具栏区域 (Toolbar)
@@ -268,24 +488,25 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
         <span className="font-bold text-gray-200 text-sm">我的资源</span>
         <div className="flex gap-2">
           {/* 新建文件夹 */}
-          <Button 
-            size="small" 
+          <Button
+            size="small"
             type="primary"
             icon={<FolderAddOutlined />}
             className="text-gray-200! bg-blue-600 hover:bg-blue-500 border-none text-xs shadow-md"
+            onClick={handleCreateFolder}
           >
             新建
           </Button>
-          
+
           {/* 上传数据 */}
-          <Upload 
+          <Upload
             customRequest={customUploadRequest}
             showUploadList={false}
             accept=".json,.geojson,.csv"
           >
-            <Button 
-              type="primary" 
-              size="small" 
+            <Button
+              type="primary"
+              size="small"
               icon={<CloudUploadOutlined />}
               className="text-gray-200! bg-blue-600 hover:bg-blue-500 border-none text-xs shadow-md"
             >
@@ -297,19 +518,19 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
 
       {/* 2. 树形列表区域 (Tree)
       */}
-      <div className="flex-1 overflow-y-auto py-2">
+      <div className="flex-1 overflow-y-auto py-2" onClick={handleTreeClick}>
         <style>{`
-          .dark-tree .ant-tree-node-content-wrapper { 
-            display: flex !important; 
+          .dark-tree .ant-tree-node-content-wrapper {
+            display: flex !important;
             align-items: center;
             transition: all 0.3s;
             height: 32px !important; /* 增加一点行高，让点击区域更大 */
             padding: 0 4px !important;
           }
-          .dark-tree .ant-tree-node-content-wrapper:hover { 
-            background-color: rgba(255, 255, 255, 0.08) !important; 
+          .dark-tree .ant-tree-node-content-wrapper:hover {
+            background-color: rgba(255, 255, 255, 0.08) !important;
           }
-          .dark-tree .ant-tree-treenode-selected .ant-tree-node-content-wrapper { 
+          .dark-tree .ant-tree-treenode-selected .ant-tree-node-content-wrapper {
             background-color: rgba(59, 130, 246, 0.2) !important; /* 使用 Tailwind 的 blue-500 透明度 */
           }
           /* 选中时的左侧高亮条，增加设计感（可选） */
@@ -323,14 +544,14 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
              background-color: #3b82f6;
           }
           /* 修正图标的默认外边距 */
-          .dark-tree .ant-tree-iconEle { 
+          .dark-tree .ant-tree-iconEle {
              display: flex !important;
              align-items: center;
              justify-content: center;
              margin-right: 8px !important; /* 图标和文字的间距 */
           }
-          .dark-tree .ant-tree-switcher { 
-            color: rgba(255, 255, 255, 0.4); 
+          .dark-tree .ant-tree-switcher {
+            color: rgba(255, 255, 255, 0.4);
             display: flex !important;
             align-items: center;
             justify-content: center;
@@ -345,7 +566,7 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
           <Tree
             className="dark-tree bg-transparent"
             blockNode // 这个很重要，让整行都能点击
-            showIcon={false} 
+            showIcon={false}
             defaultExpandAll
             selectedKeys={selectedKeys}
             onSelect={handleSelect}
@@ -358,7 +579,7 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
               //   {/* {expanded ? '▼' : '▶'} */}
               //   {expanded ? '⌄' : '>'}
               // </span>
-              <span 
+              <span
                 className="
                   flex items-center justify-center
                   text-gray-400       /* 1. 修改颜色：这里改成浅灰色，你可以改 */
@@ -367,13 +588,13 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
                 "
               >
                 {expanded ? (
-                  <DownOutlined 
+                  <DownOutlined
                     /* 2. 修改粗细：Ant Design 图标默认很细，通过加描边来实现“加粗”效果 */
-                    style={{ strokeWidth: '150', stroke: 'currentColor' }} 
+                    style={{ strokeWidth: '150', stroke: 'currentColor' }}
                   />
                 ) : (
-                  <DownOutlined 
-                    style={{ strokeWidth: '150', stroke: 'currentColor' }} 
+                  <DownOutlined
+                    style={{ strokeWidth: '150', stroke: 'currentColor' }}
                   />
                 )}
               </span>

@@ -1,10 +1,12 @@
 import { Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
-// 因为 Multer 存硬盘的代码和控制器处理数据的代码，
-// 不在同一个文件里面，所以不好将路径这个参数传递，只好通过 req 的方式，所以需要req
-// Multer存到硬盘之后，但是控制器还不知道这个文件路径是什么，所以需要req
+// 因为 Multer 存硬盘的代码和控制器处理数据的代码，                                                                                                                        │
+// 不在同一个文件里面，所以不好将路径这个参数传递，只好通过 req 的方式，所以需要req                                                                                        │
+// Multer存到硬盘之后，但是控制器还不知道这个文件路径是什么，所以需要req                                                                                                   │
 // 先进行Multer存硬盘这个步骤，然后进行控制器处理数据这个步骤，并返回回复
+
+import FileNode from '../models/FileNode'; // 导入文件节点模型
 
 /**
  * 文件上传控制器
@@ -12,6 +14,14 @@ import path from 'path';
  */
 export const uploadFile = async (req: Request, res: Response) => {
     try {
+        // 🚨【关键修改】获取 parentId
+        // Multer 处理 FormData 时，文本字段会在 req.body 中
+        // 前端传过来的可能是字符串 'null' 或 'undefined'，需要清洗
+        let parentId = req.body.parentId;
+        if (parentId === 'null' || parentId === 'undefined' || parentId === '') {
+            parentId = null;
+        }
+
         // 检查是否有文件被上传
         if (!req.file) {
             return res.status(400).json({
@@ -63,16 +73,32 @@ export const uploadFile = async (req: Request, res: Response) => {
             parsedData = JSON.parse(fileContent);
         }
 
+        // 在数据库中创建文件节点记录
+        const fileNode = new FileNode({
+            name: req.file.originalname,      // 文件名
+            type: 'file',                     // 类型为文件
+            parentId: parentId,                   // 默认放在根目录，后续可以根据需求调整
+            path: filePath,                   // 文件存储路径
+            size: req.file.size,              // 文件大小
+            extension: fileExtension,         // 文件扩展名
+            mimeType: req.file.mimetype       // MIME类型
+        });
+
+        // 保存到数据库
+        const savedFileNode = await fileNode.save();
+
         // 成功响应
         // 这里要和前端的 geoService.ts 中的 UploadResponse 接口对应
         res.status(200).json({
             code: 200,
             message: '文件上传并解析成功',
             data: {
-                filename: req.file.originalname,  // 返回原始文件名
-                geoJson: parsedData,         // 返回解析后的 GeoJSON 数据
-                fileSize: req.file.size, // 文件大小
-                fileType: fileExtension // 文件类型
+                // 前端调用时会用到这些字段，名称注意要一致
+                _id: savedFileNode._id,        // 返回数据库记录的ID
+                fileName: req.file.originalname, // 返回原始文件名 (注意：这里是 fileName，不是 filename)
+                geoJson: parsedData,            // 返回解析后的 GeoJSON 数据
+                fileSize: req.file.size,        // 文件大小
+                fileType: fileExtension         // 文件类型
             }
         });
 
@@ -87,3 +113,283 @@ export const uploadFile = async (req: Request, res: Response) => {
         });
     }
 };
+
+/**
+ * 创建文件夹控制器
+ * 在数据库中创建一个新的文件夹记录
+ */
+export const createFolder = async (req: Request, res: Response) => {
+    try {
+        const { name, parentId } = req.body;
+
+        // 验证必要参数
+        if (!name) {
+            return res.status(400).json({
+                code: 400,
+                message: '名称不能为空',
+                data: null
+            });
+        }
+
+        // 验证 parentId（如果不是根目录，则必须是有效的ObjectId）
+        if (parentId !== null && parentId !== undefined && parentId !== '') {
+            if (!parentId.match(/^[0-9a-fA-F]{24}$/)) { // 简单验证ObjectId格式
+                return res.status(400).json({
+                    code: 400,
+                    message: '无效的父级ID格式',
+                    data: null
+                });
+            }
+        }
+
+        // 检查同名文件夹是否已存在
+        const existingFolder = await FileNode.findOne({
+            name: name,
+            parentId: parentId || null,
+            type: 'folder'
+        });
+
+        if (existingFolder) {
+            return res.status(409).json({
+                code: 409,
+                message: '同名文件夹已存在',
+                data: null
+            });
+        }
+
+        // 创建文件夹节点
+        const folderNode = new FileNode({
+            name: name,
+            type: 'folder',
+            parentId: parentId || null,  // 如果没有指定父ID，则为根目录
+        });
+
+        // 保存到数据库
+        const savedFolderNode = await folderNode.save();
+
+        // 成功响应
+        res.status(200).json({
+            code: 200,
+            message: '文件夹创建成功',
+            data: {
+                _id: savedFolderNode._id,
+                name: savedFolderNode.name,
+                parentId: savedFolderNode.parentId,
+                type: 'folder'
+            }
+        });
+
+    } catch (error: any) {
+        console.error('创建文件夹错误:', error);
+
+        // 错误响应
+        res.status(500).json({
+            code: 500,
+            message: `创建文件夹失败: ${error.message}`,
+            data: null
+        });
+    }
+};
+
+/**
+ * 获取文件树控制器
+ * 从数据库查询所有文件节点并转换为树形结构
+ */
+export const getFileTree = async (req: Request, res: Response) => {
+    try {
+        // 从数据库查询所有文件节点
+        const fileNodes = await FileNode.find({}).sort({ parentId: 1, createdAt: 1 });
+
+        // 将扁平数组转换为树形结构
+        const treeData = buildTreeFromFlatArray(fileNodes);
+
+        // 成功响应
+        res.status(200).json({
+            code: 200,
+            message: '获取文件树成功',
+            data: treeData
+        });
+
+    } catch (error: any) {
+        console.error('获取文件树错误:', error);
+
+        // 错误响应
+        res.status(500).json({
+            code: 500,
+            message: `获取文件树失败: ${error.message}`,
+            data: null
+        });
+    }
+};
+
+// 这是一个新函数，用于前端点击文件时获取内容
+export const getFileContent = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params; 
+        
+        const fileNode = await FileNode.findById(id);
+        if (!fileNode) {
+            return res.status(404).json({ code: 404, message: '文件记录不存在' });
+        }
+
+        // 🚨【修复点】先检查 path 是否存在
+        // 如果是文件夹类型，或者数据异常，path 可能为空
+        if (!fileNode.path) {
+            return res.status(400).json({ code: 400, message: '文件路径不存在，无法读取' });
+        }
+
+        // 现在 TS 知道 fileNode.path 一定是 string 了，不会再报错
+        const content = fs.readFileSync(fileNode.path, 'utf-8');
+
+        // 🚨【修复部分】根据后缀名决定如何处理数据
+        let responseData: any;
+        // 获取后缀 (优先用数据库里的 extension，没有就从文件名取)
+        const ext = fileNode.extension || path.extname(fileNode.name).toLowerCase();
+        if (ext === '.json' || ext === '.geojson') {
+            try {
+                // 只有 JSON 才 parse
+                responseData = JSON.parse(content);
+            } catch (e) {
+                // 防止 JSON 文件本身损坏导致报错
+                return res.status(500).json({ code: 500, message: 'JSON 文件格式错误，解析失败' });
+            }
+        } else if (ext === '.csv') {
+            // ✅ 对于 CSV，暂时直接返回文本内容
+            // (如果你后续想在前端显示表格，可以在这里用 csv-parser 库把它转成 JSON 数组)
+            responseData = content; 
+            
+            // 或者，如果你想让前端拿到一个标准结构，可以暂时包装一下：
+            // responseData = { type: 'csv', raw: content };
+        } else {
+            // 其他类型默认返回文本
+            responseData = content;
+        }
+
+        res.status(200).json({
+            code: 200,
+            data: responseData
+        });
+    } catch (error: any) {
+        res.status(500).json({ code: 500, message: error.message });
+    }
+};
+
+/**
+ * 重命名节点
+ * PUT /api/files/:id
+ */
+export const renameNode = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const { name } = req.body;
+
+        if (!name) return res.status(400).json({ code: 400, message: '名称不能为空' });
+
+        const node = await FileNode.findById(id);
+        if (!node) return res.status(404).json({ code: 404, message: '文件不存在' });
+
+        // 更新名称
+        node.name = name;
+        
+        // 触发 save，这样 FileNode.ts 里的 pre('save') 钩子会自动更新 extension 后缀
+        await node.save(); 
+
+        res.status(200).json({ code: 200, message: '重命名成功', data: node });
+    } catch (error: any) {
+        // 处理唯一索引冲突 (同目录下重名)
+        if (error.code === 11000) {
+            return res.status(409).json({ code: 409, message: '该目录下已存在同名文件' });
+        }
+        res.status(500).json({ code: 500, message: error.message });
+    }
+};
+
+/**
+ * 递归删除文件夹及其子节点的辅助函数
+ */
+const deleteFolderRecursive = async (folderId: string) => {
+    // 1. 找到该文件夹下的所有子节点
+    const children = await FileNode.find({ parentId: folderId });
+
+    for (const child of children) {
+        if (child.type === 'folder') {
+            // 如果是文件夹，递归删除
+            await deleteFolderRecursive(child._id.toString());
+        } else {
+            // 如果是文件，这里可以添加删除物理文件的逻辑 fs.unlinkSync(child.path)
+            // 为了演示简单，只删除数据库记录
+        }
+        // 删除子节点记录
+        await FileNode.findByIdAndDelete(child._id);
+    }
+};
+
+/**
+ * 删除节点
+ * DELETE /api/files/:id
+ */
+export const deleteNode = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const node = await FileNode.findById(id);
+
+        if (!node) return res.status(404).json({ code: 404, message: '文件不存在' });
+
+        // 如果是文件夹，先递归删除所有子内容
+        if (node.type === 'folder') {
+            await deleteFolderRecursive(node._id.toString());
+        } else {
+            // 如果是文件，物理删除 (可选)
+            // if (fs.existsSync(node.path)) fs.unlinkSync(node.path);
+        }
+
+        // 删除节点本身
+        await FileNode.findByIdAndDelete(id);
+
+        res.status(200).json({ code: 200, message: '删除成功' });
+    } catch (error: any) {
+        res.status(500).json({ code: 500, message: error.message });
+    }
+};
+
+/**
+ * 将扁平数组转换为树形结构的辅助函数
+ * @param nodes 扁平的文件节点数组
+ * @returns 树形结构的文件节点数组
+ */
+function buildTreeFromFlatArray(nodes: any[]) {
+    // 创建一个映射，便于快速查找节点
+    const nodeMap: { [key: string]: any } = {};
+    const tree: any[] = [];
+
+    // 首先创建所有节点的映射
+    nodes.forEach(node => {
+        nodeMap[node._id.toString()] = { ...node._doc }; // 使用 _doc 获取实际数据
+    });
+
+    // 然后建立父子关系
+    nodes.forEach(node => {
+        const currentNode = nodeMap[node._id.toString()];
+
+        // 设置 Ant Design Tree 需要的字段
+        currentNode.key = node._id.toString();
+        currentNode.title = node.name;
+        currentNode.isLeaf = node.type === 'file';
+
+        // 如果是根节点（parentId 为 null），直接添加到树的顶层
+        if (!node.parentId) {
+            tree.push(currentNode);
+        } else {
+            // 如果不是根节点，找到其父节点并添加到父节点的 children 数组中
+            const parentNode = nodeMap[node.parentId.toString()];
+            if (parentNode) {
+                if (!parentNode.children) {
+                    parentNode.children = [];
+                }
+                parentNode.children.push(currentNode);
+            }
+        }
+    });
+
+    return tree;
+}

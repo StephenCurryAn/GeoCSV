@@ -14,6 +14,7 @@ export interface UploadResponse {
   code: number;
   message: string;
   data: {
+    _id: string;
     geoJson: any; // 上传文件转换后的 GeoJSON 数据
     fileName: string; // 上传的文件名
     fileSize: number; // 文件大小
@@ -47,7 +48,7 @@ class GeoService {
    */
   // : Promise<UploadResponse>是输出承诺，会返回一个UploadResponse类型的数据
   // file是浏览器原生提供的文件对象(通常通过文件输入框获取)
-  async uploadGeoData(file: File): Promise<UploadResponse> {
+  async uploadGeoData(file: File, parentId?: string): Promise<UploadResponse> {
     try {
       // 构建表单数据，用于文件上传
       const formData = new FormData();
@@ -55,7 +56,12 @@ class GeoService {
       // 将文件添加到表单数据中，字段名为 'file'
       // 第一个'file'与后端 Multer 中间件里的 upload.single('file')一致
       formData.append('file', file);
-      
+
+      // ✅ 新增：如果有 parentId，就塞进表单发给后端
+      if (parentId) {
+        formData.append('parentId', parentId);
+      }
+
       // 发送 POST 请求到后端文件上传接口
       // 注意：Content-Type 会被自动设置为 multipart/form-data，包含边界字符串
       // await：“等待”。意思是：“在后端给我回复之前，代码先停在这儿，别往下跑。”
@@ -91,6 +97,49 @@ class GeoService {
       }
     }
   }
+
+
+  /**
+   * 3. 🚨【新增】获取文件内容 (修复 App.tsx 报错的关键)
+   * 用于点击左侧文件树时，从后端拉取文件内容
+   */
+  async getFileContent(fileId: string): Promise<any> {
+    try {
+      // 发送 GET 请求到 /api/files/content/:id
+      const response = await apiClient.get(`/files/content/${fileId}`);
+      return response.data;
+    } catch (error: any) {
+      console.error('获取文件内容失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 重命名节点
+   */
+  async renameNode(id: string, newName: string): Promise<any> {
+    try {
+        const response = await apiClient.put(`/files/${id}`, { name: newName });
+        return response.data;
+    } catch (error: any) {
+        // 如果后端返回 409 (重名)，抛出具体错误信息
+        const msg = error.response?.data?.message || '重命名失败';
+        throw new Error(msg);
+    }
+  }
+
+  /**
+   * 删除节点
+   */
+  async deleteNode(id: string): Promise<any> {
+    try {
+        const response = await apiClient.delete(`/files/${id}`);
+        return response.data;
+    } catch (error: any) {
+        throw new Error('删除失败: ' + error.message);
+    }
+  }
+
 }
 
 // 导出 GeoService 实例，使其他模块可以直接使用

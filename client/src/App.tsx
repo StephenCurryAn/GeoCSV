@@ -18,6 +18,8 @@ import React from 'react';
 import './App.css';
 import MainLayout from './layouts/MainLayout';
 import LeftPanel from './features/workspace/components/LeftPanel';
+import { geoService } from './services/geoService';
+import { message } from 'antd';
 
 function App() {
   // 用于存储已上传的文件数据
@@ -38,7 +40,7 @@ function App() {
   };
 
   // 处理文件选择
-  const handleSelectFile = (fileName: string) => {
+  const handleSelectFile = async (fileName: string, fileId?: string) => {
     console.log(`选择了文件: ${fileName}`);
     // 检查是否是已上传的文件
     if (uploadedFilesData[fileName]) {
@@ -47,9 +49,32 @@ function App() {
       // 这里可以更新地图和表格的数据
       // 例如：setGridData(uploadedFilesData[fileName].features || uploadedFilesData[fileName].rows);
       // 例如：setMapData(uploadedFilesData[fileName]);
-    } else {
-      // 如果是模拟的静态节点，暂时 log 输出
-      console.log(`该文件尚未上传或不可用: ${fileName}`);
+      return;
+    }
+    // 2. 内存里没有，说明是刷新过，或者新登录的
+    // 这时候不应该报错，而是应该去后端“捞”数据
+    // 🚨【修复点】先检查 fileId 是否存在
+    if (!fileId) {
+      console.warn(`文件 ${fileName} 没有 ID，无法从后端获取内容`);
+      return; // 如果没有 ID，直接结束，不再调用 getFileContent
+    }
+    try {
+       message.loading('正在加载数据...', 1);
+       // 假设你已经在 geoService 里写好了 getFileContent 方法
+       const res = await geoService.getFileContent(fileId); 
+       
+       if (res.code === 200) {
+           // 3. 捞回来了！存入内存，下次就不用捞了
+           setUploadedFilesData(prev => ({
+             ...prev,
+             [fileName]: res.data
+           }));
+           
+           // 4. 渲染地图
+           console.log('数据加载完成，开始渲染');
+       }
+    } catch (err) {
+       console.error('无法加载文件数据');
     }
   };
 
