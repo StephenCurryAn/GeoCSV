@@ -29,6 +29,8 @@ function App() {
 
   // 🚨【新增】当前激活的文件名 (用户正在看哪个文件)
   const [activeFileName, setActiveFileName] = useState<string>('');
+  // 🚨【新增】当前选中的要素属性（从表格点出来的）
+  const [selectedFeature, setSelectedFeature] = useState<any>(null);
 
   // 回调函数，后面根据需要再写相关的功能，传给表格，地图组件等之类的
   // 处理数据加载的回调函数
@@ -53,7 +55,7 @@ function App() {
 
     // 1. 设置当前激活的文件名
     setActiveFileName(fileName);
-
+    setSelectedFeature(null); // 切换文件时，清空选中的要素
     // 检查是否是已上传的文件
     if (uploadedFilesData[fileName]) {
       // 如果是已上传的文件，使用之前上传的数据
@@ -102,12 +104,18 @@ function App() {
       <DataPivot 
           data={uploadedFilesData[activeFileName]} 
           fileName={activeFileName} 
+          // 🚨【新增】当表格行被点击时，更新 App 的状态
+          onRowClick={(record) => setSelectedFeature(record)}
+          selectedFeature={selectedFeature}
       />
 
       {/* 第 3 个子元素：右侧 (直接放组件) */}
       <MapView 
           data={uploadedFilesData[activeFileName]} 
           fileName={activeFileName}
+          // 🚨【新增】传入选中的要素，用于高亮和弹窗
+          selectedFeature={selectedFeature}
+          onFeatureClick={(feature) => setSelectedFeature(feature)}
       />
     </MainLayout>
   )
