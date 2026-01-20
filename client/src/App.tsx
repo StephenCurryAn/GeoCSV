@@ -14,16 +14,20 @@
 //   )
 // }
 
-import React from 'react';
+import React, { useState } from 'react';
 import './App.css';
 import MainLayout from './layouts/MainLayout';
 import LeftPanel from './features/workspace/components/LeftPanel';
+import DataPivot from './features/table/components/DataPivot';
 import { geoService } from './services/geoService';
 import { message } from 'antd';
 
 function App() {
   // 用于存储已上传的文件数据
   const [uploadedFilesData, setUploadedFilesData] = React.useState<Record<string, any>>({});
+
+  // 🚨【新增】当前激活的文件名 (用户正在看哪个文件)
+  const [activeFileName, setActiveFileName] = useState<string>('');
 
   // 回调函数，后面根据需要再写相关的功能，传给表格，地图组件等之类的
   // 处理数据加载的回调函数
@@ -37,11 +41,18 @@ function App() {
     // 这里可以更新地图和表格的数据
     // 例如：setGridData(data.features || data.rows);
     // 例如：setMapData(data);
+
+    // 上传成功后，自动选中该文件
+    setActiveFileName(fileName);
   };
 
   // 处理文件选择
   const handleSelectFile = async (fileName: string, fileId?: string) => {
     console.log(`选择了文件: ${fileName}`);
+
+    // 1. 设置当前激活的文件名
+    setActiveFileName(fileName);
+
     // 检查是否是已上传的文件
     if (uploadedFilesData[fileName]) {
       // 如果是已上传的文件，使用之前上传的数据
@@ -87,22 +98,29 @@ function App() {
       />
 
       {/* 中间面板内容 - 数据透视表 */}
-      <div className="text-gray-300">
-        <p>中间数据透视表内容区域</p>
-        <div className="mt-4 p-4 bg-geo-panel rounded">
-          <p>这里是AG Grid数据表格</p>
-          <div className="mt-2 text-xs text-gray-400">行数: 100 | 列数: 10</div>
-        </div>
+      {/* 🚨【修改】使用 DataPivot 组件 */}
+      <div className="h-full w-full bg-[#111827] flex flex-col overflow-hidden">
+        {/* 传参：
+            data: 根据 activeFileName 从缓存里取数据 
+            fileName: 当前文件名 (用于 DataPivot 内部判断后缀)
+        */}
+        <DataPivot 
+            data={uploadedFilesData[activeFileName]} 
+            fileName={activeFileName} 
+        />
       </div>
 
       {/* 右侧面板内容 - 地图可视化 */}
-      <div className="text-gray-300">
-        <p>右侧地图可视化内容区域</p>
-        <div className="mt-4 p-4 bg-gray-900 rounded h-full flex items-center justify-center">
-          <div className="text-center">
+      {/* 建议：也改成 h-full w-full flex flex-col，去掉 padding，让地图铺满 */}
+      <div className="h-full w-full flex flex-col bg-gray-900 border-l border-gray-800 relative">
+        {/* 这里以后放 MapView 组件 */}
+        <div className="flex-1 flex items-center justify-center text-gray-500">
+           <div className="text-center">
             <p className="mb-2">🌍 地图容器</p>
-            <p className="text-xs text-gray-500">MapLibre GL JS 将在此渲染</p>
-          </div>
+            <p className="text-xs">MapLibre GL JS 将在此渲染</p>
+            {/* 显示当前激活的图层名，方便调试 */}
+            {activeFileName && <p className="text-xs text-blue-500 mt-2">当前图层: {activeFileName}</p>}
+           </div>
         </div>
       </div>
     </MainLayout>

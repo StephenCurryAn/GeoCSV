@@ -31,6 +31,10 @@ export const uploadFile = async (req: Request, res: Response) => {
             });
         }
 
+        // 🚨【关键修复】解决中文文件名乱码问题
+        // 原理：Multer 用 latin1 读取了 utf8 的字符，我们把它逆转回去
+        req.file.originalname = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+
         // 获取上传文件的完整路径
         const filePath = req.file.path;
 

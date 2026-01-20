@@ -140,7 +140,7 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
                     className="flex-1 h-6 text-xs"
                 />
             ) : (
-                <span className={`flex-1 truncate transition-colors ${isSelected ? 'text-blue-500 font-medium' : 'text-gray-500 group-hover:text-blue-400'}`}>
+                <span className={`flex-1 truncate transition-colors ${isSelected ? 'text-blue-300 font-medium' : 'text-gray-200 group-hover:text-blue-400'}`}>
                     {node.title}
                 </span>
             )}
@@ -519,42 +519,66 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
       {/* 2. 树形列表区域 (Tree)
       */}
       <div className="flex-1 overflow-y-auto py-2" onClick={handleTreeClick}>
+        {/* 🎨 样式注入：覆盖 Ant Design 默认的白色样式，适配黑色炫酷主题 */}
         <style>{`
+          /* 1. 核心：强制移除 Tree 组件的默认白色背景和黑色文字 */
+          .dark-tree.ant-tree {
+            background: transparent !important;
+            color: #ffffff !important; /* ✨ 从 #9ca3af 改为 #e5e7eb (更亮) */
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+          }
+
+          /* 2. 节点行样式 */
           .dark-tree .ant-tree-node-content-wrapper {
             display: flex !important;
             align-items: center;
-            transition: all 0.3s;
-            height: 32px !important; /* 增加一点行高，让点击区域更大 */
-            padding: 0 4px !important;
+            transition: all 0.2s;
+            height: 32px !important;
+            padding: 0 6px !important;
+            color: #e5e7eb !important; /* ✨ 同样改为 #e5e7eb */
+            border-radius: 4px;
           }
+
+          /* 3. 悬停效果 (Hover)：淡淡的白色微光 */
           .dark-tree .ant-tree-node-content-wrapper:hover {
             background-color: rgba(255, 255, 255, 0.08) !important;
+            color: #e5e7eb !important; /* text-gray-200 */
           }
+
+          /* 4. 选中效果 (Selected)：科技蓝背景 + 高亮文字 */
           .dark-tree .ant-tree-treenode-selected .ant-tree-node-content-wrapper {
-            background-color: rgba(59, 130, 246, 0.2) !important; /* 使用 Tailwind 的 blue-500 透明度 */
+            background-color: rgba(37, 99, 235, 0.15) !important; /* 深蓝透明背景 */
+            color: #60a5fa !important; /* text-blue-400 */
           }
-          /* 选中时的左侧高亮条，增加设计感（可选） */
+
+          /* 5. 选中时的左侧高亮指示条 (装饰性细节) */
           .dark-tree .ant-tree-treenode-selected .ant-tree-node-content-wrapper::before {
              content: '';
              position: absolute;
              left: 0;
-             top: 0;
-             bottom: 0;
+             top: 50%;
+             transform: translateY(-50%);
+             height: 14px;
              width: 3px;
-             background-color: #3b82f6;
+             background-color: #3b82f6; /* blue-500 */
+             border-radius: 0 2px 2px 0;
+             box-shadow: 0 0 8px rgba(59, 130, 246, 0.6); /* 加一点发光效果 */
           }
-          /* 修正图标的默认外边距 */
+
+          /* 6. 修正图标位置 */
           .dark-tree .ant-tree-iconEle {
              display: flex !important;
              align-items: center;
              justify-content: center;
-             margin-right: 8px !important; /* 图标和文字的间距 */
+             margin-right: 8px !important;
           }
+
+          /* 7. 修正展开/折叠小箭头的颜色 */
           .dark-tree .ant-tree-switcher {
-            color: rgba(255, 255, 255, 0.4);
-            display: flex !important;
-            align-items: center;
-            justify-content: center;
+            background: transparent !important;
+          }
+          .dark-tree .ant-tree-switcher-icon {
+            color: #6b7280 !important; /* gray-500 */
           }
         `}</style>
 
