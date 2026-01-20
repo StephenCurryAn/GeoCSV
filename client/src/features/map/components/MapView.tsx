@@ -280,7 +280,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
         popupRef.current?.remove();
 
         // 生成弹窗内容 HTML (过滤掉不想显示的内部字段)
-        const ignoreKeys = ['_geometry', 'cp', 'childNum', 'center', '_geometry_type'];
+        const ignoreKeys = ['_geometry', '_geometry_type'];
         const rowsHtml = Object.entries(selectedFeature)
             .filter(([key]) => !ignoreKeys.includes(key) && typeof key === 'string')
             .map(([key, val]) => `

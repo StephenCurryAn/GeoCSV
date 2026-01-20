@@ -3,7 +3,9 @@ import { AgGridReact } from 'ag-grid-react';
 import { type ColDef, ModuleRegistry, AllCommunityModule } from 'ag-grid-community'; 
 import 'ag-grid-community/styles/ag-grid.css'; 
 import 'ag-grid-community/styles/ag-theme-alpine.css'; 
-import { Empty } from 'antd';
+// ... 引入 antd 组件
+import { Empty, Button, Space, Popconfirm, message } from 'antd';
+import { PlusOutlined, DeleteOutlined, TableOutlined, MinusSquareOutlined } from '@ant-design/icons';
 // 🚨【新增】引入 center 计算
 import { center } from '@turf/turf';
 
@@ -17,14 +19,23 @@ interface DataPivotProps {
   onRowClick?: (record: any) => void;
   // 🚨【新增】接收选中的 Feature
   selectedFeature?: any;
+  // 🚨【新增】数据变更回调 (通知父组件保存)
+  onDataChange?: (rowIndex: number, newData: any) => void;
+  // 🚨【新增】操作回调
+  onAddRow?: () => void;
+  onDeleteRow?: (rowIndex: number) => void;
+  onAddColumn?: () => void;
+  onDeleteColumn?: (fieldName: string) => void;
 }
 
-const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selectedFeature }) => {
+const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selectedFeature, onDataChange, onAddRow, onDeleteRow, onAddColumn, onDeleteColumn }) => {
   // 🚨【新增】Grid 引用，用于调用 API
   const gridRef = useRef<AgGridReact>(null);
 
   const [rowData, setRowData] = useState<any[]>([]);
   const [columnDefs, setColumnDefs] = useState<ColDef[]>([]);
+  // 记录当前选中的行索引，用于删除行
+  const [selectedRowIndex, setSelectedRowIndex] = useState<number | null>(null);
 
   useEffect(() => {
     if (!data) {
@@ -78,25 +89,40 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
    */
   const generateColumnDefs = (rows: any[]) => {
     if (rows.length === 0) return [];
-
+    // 定义不可编辑的字段 (例如 ID 和 坐标)
+    const readOnlyFields = ['id', '_geometry', 'cp', '_cp'];
     const keys = Object.keys(rows[0]);
-    return keys.map(key => ({
-      field: key,
-      headerName: key.toUpperCase(),
-      sortable: true,
-      filter: true,
-      resizable: true,
-      flex: 1,
-      // 🚨【修复 2】解决 Warning #48
-      // 如果值是对象或数组（比如 "cp": [120, 30]），转成字符串显示
-      valueFormatter: (params: any) => {
-        const val = params.value;
-        if (typeof val === 'object' && val !== null) {
-          return JSON.stringify(val); 
+    return keys
+      .filter(k => !['_cp'].includes(k))
+      .map(key => ({
+        field: key,
+        // 🚨【修改点 2】自定义表头名称 (让显示更友好)
+        headerName: (() => {
+            if (key === '_geometry') return '图层类型';
+            if (key === 'cp') return '中心坐标';
+            return key.toUpperCase();
+        })(),
+        sortable: true,
+        filter: true,
+        resizable: true,
+        flex: 1,
+
+        // 🚨【关键】开启编辑！
+        // 只有不在 readOnlyFields 里的字段可以编辑
+        editable: !readOnlyFields.includes(key),
+        // 编辑器配置 (默认是文本框，也可以配下拉框等)
+        cellEditor: 'agTextCellEditor',
+
+        // 🚨【修复 2】解决 Warning #48
+        // 如果值是对象或数组（比如 "cp": [120, 30]），转成字符串显示
+        valueFormatter: (params: any) => {
+          const val = params.value;
+          if (typeof val === 'object' && val !== null) {
+            return JSON.stringify(val); 
+          }
+          return val;
         }
-        return val;
-      }
-    }));
+      }));
   };
 
   const processGeoJSON = (geoData: any) => {
@@ -146,9 +172,76 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
 
   return (
     <div className="flex flex-col h-full">
-      <div className="mb-2 px-2 text-xs text-blue-400 font-mono flex justify-between">
+      {/* <div className="mb-2 px-2 text-xs text-blue-400 font-mono flex justify-between">
         <span>当前文件: {fileName}</span>
         <span>记录数: {rowData.length}</span>
+      </div> */}
+
+      {/* 🚨【新增】工具栏 */}
+      <div className="bg-[#1f2937] p-2 border-b border-gray-700 flex justify-between items-center">
+        <div className="text-xs text-blue-400 font-mono">
+          <span>{fileName}</span>
+          <span className="ml-2 text-gray-500">({rowData.length} records)</span>
+        </div>
+        
+        {/* 操作按钮组 */}
+        <Space size="small">
+            <Button 
+                type="primary" 
+                size="small" 
+                icon={<PlusOutlined />} 
+                onClick={onAddRow}
+                disabled={!onAddRow}
+            >
+                增行
+            </Button>
+            
+            <Popconfirm 
+                title="确定删除选中行吗？" 
+                onConfirm={() => {
+                    if (selectedRowIndex !== null && onDeleteRow) {
+                        onDeleteRow(selectedRowIndex);
+                        setSelectedRowIndex(null); // 删除后重置
+                    } else {
+                        message.warning('请先选中一行');
+                    }
+                }}
+            >
+                <Button 
+                    type="primary" 
+                    danger 
+                    size="small" 
+                    icon={<DeleteOutlined />}
+                    disabled={selectedRowIndex === null}
+                >
+                    删行
+                </Button>
+            </Popconfirm>
+
+            <div className="w-px h-4 bg-gray-600 mx-1"></div>
+
+            <Button 
+                size="small" 
+                icon={<TableOutlined />} 
+                className="bg-gray-700 text-white border-gray-600"
+                onClick={onAddColumn}
+            >
+                增列
+            </Button>
+            
+            <Button 
+                size="small" 
+                icon={<MinusSquareOutlined />} 
+                className="bg-gray-700 text-white border-gray-600"
+                onClick={() => {
+                   // 简单的交互：让用户输入要删除的列名 (进阶版应该做一个下拉选框Modal)
+                   const col = prompt("请输入要删除的列名（注意：id, name, cp 禁止删除）:");
+                   if (col && onDeleteColumn) onDeleteColumn(col);
+                }}
+            >
+                删列
+            </Button>
+        </Space>
       </div>
 
       <div className="ag-theme-alpine-dark flex-1 w-full h-full">
@@ -187,6 +280,11 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
             .ag-theme-alpine-dark .ag-cell-focus {
                 border-color: transparent !important;
             }
+
+            /* 🚨 修复复选框在暗色模式下的可见性 */
+            .ag-checkbox-input-wrapper {
+                font-size: 14px;
+            }
         `}</style>
         
         <AgGridReact
@@ -204,14 +302,47 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
             paginationPageSize={20}
             animateRows={true}
 
-            // 🚨【关键修复】开启单行选中模式！
-            // 没有这行代码，AG Grid 就不会给行添加 ag-row-selected 类，CSS 就不会生效
-            rowSelection={{ mode: 'singleRow' }}
+            // 🚨 监听行选中，为了获取要删除的行号
+            onRowSelected={(event) => {
+                if (event.node.isSelected() && event.node.rowIndex !== null) {
+                    setSelectedRowIndex(event.node.rowIndex);
+                }
+            }}
 
-            // 🚨【新增】行点击事件
-            onRowClicked={(params) => {
+            // 🚨【关键修改 1】明确配置选择模式和复选框
+            // checkboxes: true 确保每行前面都有框 (虽然你可能通过其他方式实现了，但这样写最稳)
+            // headerCheckbox: false 禁用全选，因为我们做的是单选联动
+            rowSelection={{ 
+                mode: 'singleRow', 
+                checkboxes: true,
+            }}
+            
+            // 🚨【关键修改 2】使用 onSelectionChanged 替代 onRowClicked
+            // 无论点击行、复选框还是键盘操作，只要选中变了，这里都会触发
+            onSelectionChanged={(event) => {
+                // 🛑 防死循环：如果选中操作是由 API 触发的（比如点击地图导致表格更新），就不再回传
+                if (event.source === 'api') return;
+
+                const selectedRows = event.api.getSelectedRows();
                 if (onRowClick) {
-                    onRowClick(params.data);
+                    if (selectedRows.length > 0) {
+                        onRowClick(selectedRows[0]);
+                    } else {
+                        // 如果取消选中（点击复选框取消），通知父组件清空
+                        onRowClick(null);
+                    }
+                }
+            }}
+
+            // 🚨【关键修改】监听单元格修改完成事件
+            onCellValueChanged={(event) => {
+                console.log('单元格已修改:', event);
+                if (onDataChange) {
+                    // event.node.rowIndex 是行号
+                    // event.data 是修改后的这一行完整数据
+                    if (event.node.rowIndex !== null && event.node.rowIndex !== undefined) {
+                        onDataChange(event.node.rowIndex, event.data);
+                    }
                 }
             }}
         />

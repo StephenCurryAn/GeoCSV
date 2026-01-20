@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import fs from 'fs';
+// import { promises as fsPromises } from 'fs'; // 🚨【修改】更稳妥的导入方式，给 updateFileData 用
 import path from 'path';
 // 因为 Multer 存硬盘的代码和控制器处理数据的代码，                                                                                                                        │
 // 不在同一个文件里面，所以不好将路径这个参数传递，只好通过 req 的方式，所以需要req                                                                                        │
@@ -7,6 +8,101 @@ import path from 'path';
 // 先进行Multer存硬盘这个步骤，然后进行控制器处理数据这个步骤，并返回回复
 
 import FileNode from '../models/FileNode'; // 导入文件节点模型
+
+// 🚨【修改】使用这种方式获取 promises，兼容性最好，防止 undefined 报错
+const fsPromises = fs.promises;
+
+/**
+ * 🚨【修改】读取并解析文件
+ * 增加了 dbExtension 参数，优先使用数据库存的后缀，防止物理文件名被改乱（如 .json_12345）导致识别失败
+ */
+const readAndParseFile = async (filePath: string, dbExtension?: string) => {
+    // 1. 检查物理文件是否存在
+    try {
+        await fsPromises.access(filePath);
+    } catch {
+        throw new Error(`物理文件丢失，路径: ${filePath}`);
+    }
+
+    // 🚨 核心修复：优先用数据库里的后缀 (比如 .json)，如果没有才去解析路径
+    let ext = dbExtension || path.extname(filePath);
+    ext = ext.toLowerCase();
+
+    console.log(`[FileController] 正在读取: ${path.basename(filePath)} | 识别后缀: ${ext}`);
+
+    const content = await fsPromises.readFile(filePath, 'utf-8');
+    
+    if (ext === '.json' || ext === '.geojson') {
+        try {
+            return { type: 'json', data: JSON.parse(content) };
+        } catch (e) {
+            throw new Error('JSON 文件内容格式错误，解析失败');
+        }
+    } else if (ext === '.csv') {
+        return { type: 'csv', data: content }; 
+    } else if (ext === '.shp') {
+        return { type: 'shp', data: null };
+    }
+    
+    // 默认当做文本返回
+    return { type: 'text', data: content };
+};
+
+/**
+ * 保存文件
+ */
+const saveFile = async (filePath: string, type: string, data: any) => {
+    if (type === 'json') {
+        await fsPromises.writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
+    } else {
+        if (typeof data === 'string') {
+            await fsPromises.writeFile(filePath, data, 'utf-8');
+        }
+    }
+};
+
+
+/**
+ * 将扁平数组转换为树形结构的辅助函数
+ * @param nodes 扁平的文件节点数组
+ * @returns 树形结构的文件节点数组
+ */
+function buildTreeFromFlatArray(nodes: any[]) {
+    // 创建一个映射，便于快速查找节点
+    const nodeMap: { [key: string]: any } = {};
+    const tree: any[] = [];
+
+    // 首先创建所有节点的映射
+    nodes.forEach(node => {
+        nodeMap[node._id.toString()] = { ...node._doc }; // 使用 _doc 获取实际数据
+    });
+
+    // 然后建立父子关系
+    nodes.forEach(node => {
+        const currentNode = nodeMap[node._id.toString()];
+
+        // 设置 Ant Design Tree 需要的字段
+        currentNode.key = node._id.toString();
+        currentNode.title = node.name;
+        currentNode.isLeaf = node.type === 'file';
+
+        // 如果是根节点（parentId 为 null），直接添加到树的顶层
+        if (!node.parentId) {
+            tree.push(currentNode);
+        } else {
+            // 如果不是根节点，找到其父节点并添加到父节点的 children 数组中
+            const parentNode = nodeMap[node.parentId.toString()];
+            if (parentNode) {
+                if (!parentNode.children) {
+                    parentNode.children = [];
+                }
+                parentNode.children.push(currentNode);
+            }
+        }
+    });
+
+    return tree;
+}
 
 /**
  * 文件上传控制器
@@ -356,44 +452,236 @@ export const deleteNode = async (req: Request, res: Response) => {
     }
 };
 
+
 /**
- * 将扁平数组转换为树形结构的辅助函数
- * @param nodes 扁平的文件节点数组
- * @returns 树形结构的文件节点数组
+ * 🚨【修改后】更新文件内部数据
+ * 使用 fsPromises 来支持 await
  */
-function buildTreeFromFlatArray(nodes: any[]) {
-    // 创建一个映射，便于快速查找节点
-    const nodeMap: { [key: string]: any } = {};
-    const tree: any[] = [];
+export const updateFileData = async (req: Request, res: Response) => {
+  try {
+    const fileId = req.params.id;
+    const { rowIndex, data } = req.body; 
 
-    // 首先创建所有节点的映射
-    nodes.forEach(node => {
-        nodeMap[node._id.toString()] = { ...node._doc }; // 使用 _doc 获取实际数据
+    // 1. 数据库校验
+    const fileNode = await FileNode.findById(fileId);
+    if (!fileNode) {
+      return res.status(404).json({ code: 404, message: '文件不存在' });
+    }
+
+    if (fileNode.type === 'folder' || !fileNode.path) {
+      return res.status(400).json({ code: 400, message: '目标不是有效的文件' });
+    }
+
+    const absolutePath = path.resolve(process.cwd(), fileNode.path);
+
+    // 3. 读取物理文件内容
+    // 🚨【修改点 1】使用 fsPromises.readFile
+    const fileContent = await fsPromises.readFile(absolutePath, 'utf-8');
+    const geoJson = JSON.parse(fileContent);
+
+    // 4. 核心修改逻辑
+    if (
+      geoJson.type === 'FeatureCollection' && 
+      Array.isArray(geoJson.features) && 
+      geoJson.features[rowIndex]
+    ) {
+        const targetFeature = geoJson.features[rowIndex];
+
+        targetFeature.properties = {
+            ...targetFeature.properties,
+            ...data
+        };
+
+        if (targetFeature.properties._geometry) delete targetFeature.properties._geometry;
+        if (targetFeature.properties.cp) delete targetFeature.properties.cp;
+        if (targetFeature.properties._cp) delete targetFeature.properties._cp;
+
+        // 5. 写回硬盘
+        // 🚨【修改点 2】使用 fsPromises.writeFile
+        await fsPromises.writeFile(absolutePath, JSON.stringify(geoJson, null, 2), 'utf-8');
+
+        fileNode.updatedAt = new Date();
+        await fileNode.save();
+
+        console.log(`✅ [Update] 文件 "${fileNode.name}" 第 ${rowIndex} 行数据已更新`);
+        
+        return res.status(200).json({ 
+            code: 200, 
+            message: '保存成功',
+            data: { updatedAt: fileNode.updatedAt }
+        });
+
+    } else {
+        return res.status(400).json({ 
+            code: 400, 
+            message: 'GeoJSON 结构不匹配或行索引越界，无法更新' 
+        });
+    }
+
+  } catch (error: any) {
+    console.error('❌ 更新文件失败:', error);
+    return res.status(500).json({ 
+        code: 500, 
+        message: '服务器内部错误: ' + error.message 
     });
+  }
+};
 
-    // 然后建立父子关系
-    nodes.forEach(node => {
-        const currentNode = nodeMap[node._id.toString()];
+/**
+ * 新增行 (Add Row)
+ */
+export const addRow = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const fileNode = await FileNode.findById(id);
+        if (!fileNode || !fileNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
 
-        // 设置 Ant Design Tree 需要的字段
-        currentNode.key = node._id.toString();
-        currentNode.title = node.name;
-        currentNode.isLeaf = node.type === 'file';
+        const absolutePath = path.resolve(process.cwd(), fileNode.path);
+        
+        // 🚨【关键修改】传入 fileNode.extension，告诉解析器这是个 json 文件
+        const { type, data } = await readAndParseFile(absolutePath, fileNode.extension);
 
-        // 如果是根节点（parentId 为 null），直接添加到树的顶层
-        if (!node.parentId) {
-            tree.push(currentNode);
-        } else {
-            // 如果不是根节点，找到其父节点并添加到父节点的 children 数组中
-            const parentNode = nodeMap[node.parentId.toString()];
-            if (parentNode) {
-                if (!parentNode.children) {
-                    parentNode.children = [];
-                }
-                parentNode.children.push(currentNode);
+        if (type === 'json' && data.type === 'FeatureCollection') {
+            if (!Array.isArray(data.features)) {
+                data.features = [];
             }
-        }
-    });
+            
+            const newFeature = {
+                type: 'Feature',
+                properties: {
+                    id: Date.now().toString(),
+                    name: 'New Feature'
+                },
+                geometry: null
+            };
+            data.features.push(newFeature);
+            
+            await saveFile(absolutePath, type, data);
+            
+            fileNode.markModified('updatedAt');
+            await fileNode.save();
 
-    return tree;
-}
+            res.status(200).json({ code: 200, message: '新增行成功', data: data }); 
+        } 
+        else if (type === 'csv') {
+            res.status(501).json({ code: 501, message: 'CSV 暂不支持增行' });
+        } else {
+            res.status(400).json({ code: 400, message: '只支持 GeoJSON 格式' });
+        }
+    } catch (error: any) {
+        console.error('新增行失败:', error);
+        res.status(500).json({ code: 500, message: error.message });
+    }
+};
+
+/**
+ * 删除行
+ */
+export const deleteRow = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const { rowIndex } = req.body;
+
+        const fileNode = await FileNode.findById(id);
+        if (!fileNode || !fileNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+
+        const absolutePath = path.resolve(process.cwd(), fileNode.path);
+        // 🚨 传入 extension
+        const { type, data } = await readAndParseFile(absolutePath, fileNode.extension);
+
+        if (type === 'json' && data.type === 'FeatureCollection' && Array.isArray(data.features)) {
+            if (rowIndex >= 0 && rowIndex < data.features.length) {
+                data.features.splice(rowIndex, 1);
+                await saveFile(absolutePath, type, data);
+                
+                fileNode.markModified('updatedAt');
+                await fileNode.save();
+                
+                res.status(200).json({ code: 200, message: '删除行成功' });
+            } else {
+                res.status(400).json({ code: 400, message: '无效的行索引' });
+            }
+        } else {
+            res.status(400).json({ code: 400, message: '不支持的文件结构' });
+        }
+    } catch (error: any) {
+        console.error('删除行失败:', error);
+        res.status(500).json({ code: 500, message: error.message });
+    }
+};
+
+/**
+ * 新增列
+ */
+export const addColumn = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const { fieldName, defaultValue } = req.body;
+        if (!fieldName) return res.status(400).json({ code: 400, message: '列名不能为空' });
+
+        const fileNode = await FileNode.findById(id);
+        if (!fileNode || !fileNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+
+        const absolutePath = path.resolve(process.cwd(), fileNode.path);
+        // 🚨 传入 extension
+        const { type, data } = await readAndParseFile(absolutePath, fileNode.extension);
+
+        if (type === 'json' && data.type === 'FeatureCollection' && Array.isArray(data.features)) {
+            data.features.forEach((feature: any) => {
+                if (!feature.properties) feature.properties = {};
+                if (!Object.prototype.hasOwnProperty.call(feature.properties, fieldName)) {
+                    feature.properties[fieldName] = defaultValue || '';
+                }
+            });
+            await saveFile(absolutePath, type, data);
+            
+            fileNode.markModified('updatedAt');
+            await fileNode.save();
+
+            res.status(200).json({ code: 200, message: '新增列成功' });
+        } else {
+            res.status(400).json({ code: 400, message: '不支持的文件结构' });
+        }
+    } catch (error: any) {
+        console.error('新增列失败:', error);
+        res.status(500).json({ code: 500, message: error.message });
+    }
+};
+
+/**
+ * 删除列
+ */
+export const deleteColumn = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const { fieldName } = req.body;
+        const protectedFields = ['id', 'name', 'cp']; 
+        if (protectedFields.includes(fieldName)) return res.status(400).json({ code: 400, message: '关键字段禁止删除' });
+
+        const fileNode = await FileNode.findById(id);
+        if (!fileNode || !fileNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+
+        const absolutePath = path.resolve(process.cwd(), fileNode.path);
+        // 🚨 传入 extension
+        const { type, data } = await readAndParseFile(absolutePath, fileNode.extension);
+
+        if (type === 'json' && data.type === 'FeatureCollection' && Array.isArray(data.features)) {
+            data.features.forEach((feature: any) => {
+                if (feature.properties) {
+                    delete feature.properties[fieldName];
+                }
+            });
+            await saveFile(absolutePath, type, data);
+            
+            fileNode.markModified('updatedAt');
+            await fileNode.save();
+
+            res.status(200).json({ code: 200, message: '删除列成功' });
+        } else {
+            res.status(400).json({ code: 400, message: '不支持的文件结构' });
+        }
+    } catch (error: any) {
+        console.error('删除列失败:', error);
+        res.status(500).json({ code: 500, message: error.message });
+    }
+};

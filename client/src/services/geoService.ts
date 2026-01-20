@@ -140,6 +140,60 @@ class GeoService {
     }
   }
 
+  /**
+   * 🚨【新增】更新文件数据 (用于表格编辑保存)
+   * @param fileId 文件ID
+   * @param rowIndex 行索引
+   * @param data 修改后的数据 (Properties)
+   */
+  async updateFileData(fileId: string, rowIndex: number, data: any): Promise<any> {
+    try {
+        // 发送 POST 请求到后端更新接口
+        // 假设后端接口路由为: POST /api/files/:id/update
+        const response = await apiClient.post(`/files/${fileId}/update`, {
+            rowIndex,
+            data
+        });
+        return response.data;
+    } catch (error: any) {
+        console.error('更新数据失败:', error);
+        const msg = error.response?.data?.message || '保存失败';
+        throw new Error(msg);
+    }
+  }
+
+  /**
+   * 新增行
+   */
+  async addRow(fileId: string): Promise<any> {
+    const res = await apiClient.post(`/files/${fileId}/row`);
+    return res.data;
+  }
+
+  /**
+   * 删除行
+   */
+  async deleteRow(fileId: string, rowIndex: number): Promise<any> {
+    const res = await apiClient.post(`/files/${fileId}/row/delete`, { rowIndex });
+    return res.data;
+  }
+
+  /**
+   * 新增列
+   */
+  async addColumn(fileId: string, fieldName: string, defaultValue: string = ''): Promise<any> {
+    const res = await apiClient.post(`/files/${fileId}/column`, { fieldName, defaultValue });
+    return res.data;
+  }
+
+  /**
+   * 删除列
+   */
+  async deleteColumn(fileId: string, fieldName: string): Promise<any> {
+    const res = await apiClient.post(`/files/${fileId}/column/delete`, { fieldName });
+    return res.data;
+  }
+
 }
 
 // 导出 GeoService 实例，使其他模块可以直接使用

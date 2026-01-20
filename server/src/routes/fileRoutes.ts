@@ -1,5 +1,7 @@
 import { Router } from 'express';
-import { uploadFile, createFolder, getFileTree, getFileContent, renameNode, deleteNode } from '../controllers/fileController';
+import { uploadFile, createFolder, getFileTree, getFileContent, 
+        renameNode, deleteNode, updateFileData,
+        addRow, deleteRow, addColumn, deleteColumn } from '../controllers/fileController';
 import upload from '../utils/uploadConfig';
 
 /**
@@ -54,6 +56,28 @@ router.put('/:id', renameNode);
  * 删除文件或文件夹
  */
 router.delete('/:id', deleteNode);
+
+/**
+ * POST /:id/update
+ * 🚨【修改 2】新增：更新文件数据接口
+ * 对应前端: geoService.updateFileData
+ * 逻辑: 根据 rowIndex 修改 GeoJSON 中的 properties 并写回硬盘
+ */
+// http://localhost:3000/api/files/65a1.../update
+router.post('/:id/update', updateFileData);
+
+
+// 1. 新增行
+router.post('/:id/row', addRow);
+// 2. 删除行 (通常用 DELETE 方法，传 body 需要注意客户端支持，或者用 POST 模拟)
+// 为了方便，这里用 POST 携带 body
+router.post('/:id/row/delete', deleteRow);
+
+// 3. 新增列
+router.post('/:id/column', addColumn);
+// 4. 删除列
+router.post('/:id/column/delete', deleteColumn);
+
 
 // export default 的特权：在别的文件中引用的时候，可以随意起名
 // (在index.ts里引用的时候起名为fileRoutes)
