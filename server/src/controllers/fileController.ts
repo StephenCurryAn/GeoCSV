@@ -416,10 +416,22 @@ const deleteFolderRecursive = async (folderId: string) => {
             // 如果是文件夹，递归删除
             await deleteFolderRecursive(child._id.toString());
         } else {
-            // 如果是文件，这里可以添加删除物理文件的逻辑 fs.unlinkSync(child.path)
-            // 为了演示简单，只删除数据库记录
+            if (child.path) {
+                try {
+                    const absolutePath = path.resolve(process.cwd(), child.path);
+                    // 检查文件是否存在，存在则删除
+                    await fsPromises.access(absolutePath); 
+                    await fsPromises.unlink(absolutePath); 
+                    console.log(`🗑️ 已物理删除文件: ${child.name}`);
+                } catch (error: any) {
+                    // 如果文件不存在 (ENOENT)，说明已经被删了，忽略错误继续删数据库记录
+                    if (error.code !== 'ENOENT') {
+                        console.error(`物理文件删除失败 [${child.name}]:`, error);
+                    }
+                }
+            }
         }
-        // 删除子节点记录
+        // 删除数据库中子节点记录
         await FileNode.findByIdAndDelete(child._id);
     }
 };
@@ -439,8 +451,19 @@ export const deleteNode = async (req: Request, res: Response) => {
         if (node.type === 'folder') {
             await deleteFolderRecursive(node._id.toString());
         } else {
-            // 如果是文件，物理删除 (可选)
-            // if (fs.existsSync(node.path)) fs.unlinkSync(node.path);
+            if (node.path) {
+                try {
+                    const absolutePath = path.resolve(process.cwd(), node.path);
+                    await fsPromises.access(absolutePath); // 检查存在性
+                    await fsPromises.unlink(absolutePath); // 执行删除
+                    console.log(`🗑️ 已物理删除文件: ${node.name}`);
+                } catch (error: any) {
+                    // 忽略文件不存在的错误
+                    if (error.code !== 'ENOENT') {
+                        console.error(`物理文件删除失败 [${node.name}]:`, error);
+                    }
+                }
+            }
         }
 
         // 删除节点本身
