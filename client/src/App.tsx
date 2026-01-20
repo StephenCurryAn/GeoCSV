@@ -19,6 +19,7 @@ import './App.css';
 import MainLayout from './layouts/MainLayout';
 import LeftPanel from './features/workspace/components/LeftPanel';
 import DataPivot from './features/table/components/DataPivot';
+import MapView from './features/map/components/MapView';
 import { geoService } from './services/geoService';
 import { message } from 'antd';
 
@@ -91,38 +92,23 @@ function App() {
 
   return (
     <MainLayout>
-      {/* 左侧面板内容 - 资源管理器 */}
+      {/* 第 1 个子元素：左侧 */}
       <LeftPanel
         onDataLoaded={handleDataLoaded}
         onSelectFile={handleSelectFile}
       />
 
-      {/* 中间面板内容 - 数据透视表 */}
-      {/* 🚨【修改】使用 DataPivot 组件 */}
-      <div className="h-full w-full bg-[#111827] flex flex-col overflow-hidden">
-        {/* 传参：
-            data: 根据 activeFileName 从缓存里取数据 
-            fileName: 当前文件名 (用于 DataPivot 内部判断后缀)
-        */}
-        <DataPivot 
-            data={uploadedFilesData[activeFileName]} 
-            fileName={activeFileName} 
-        />
-      </div>
+      {/* 第 2 个子元素：中间 (直接放组件，不需要再包 div 了) */}
+      <DataPivot 
+          data={uploadedFilesData[activeFileName]} 
+          fileName={activeFileName} 
+      />
 
-      {/* 右侧面板内容 - 地图可视化 */}
-      {/* 建议：也改成 h-full w-full flex flex-col，去掉 padding，让地图铺满 */}
-      <div className="h-full w-full flex flex-col bg-gray-900 border-l border-gray-800 relative">
-        {/* 这里以后放 MapView 组件 */}
-        <div className="flex-1 flex items-center justify-center text-gray-500">
-           <div className="text-center">
-            <p className="mb-2">🌍 地图容器</p>
-            <p className="text-xs">MapLibre GL JS 将在此渲染</p>
-            {/* 显示当前激活的图层名，方便调试 */}
-            {activeFileName && <p className="text-xs text-blue-500 mt-2">当前图层: {activeFileName}</p>}
-           </div>
-        </div>
-      </div>
+      {/* 第 3 个子元素：右侧 (直接放组件) */}
+      <MapView 
+          data={uploadedFilesData[activeFileName]} 
+          fileName={activeFileName}
+      />
     </MainLayout>
   )
 }

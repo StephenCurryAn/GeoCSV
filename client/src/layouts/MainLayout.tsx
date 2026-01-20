@@ -77,7 +77,7 @@ const MainLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
   const childrenArray = React.Children.toArray(children);
 
   return (
-    <div className="w-screen h-screen overflow-hidden flex bg-geo-dark select-none">
+    <div className="w-screen h-screen overflow-hidden flex flex-row bg-geo-dark select-none">
       
       {/* --- 左侧面板 --- */}
       <div
@@ -109,7 +109,7 @@ const MainLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
         <div className="h-12 flex items-center px-4 border-b border-geo-border">
           <h2 className="text-sm font-medium text-geo-text-primary">数据透视</h2>
         </div>
-        <div className="flex-1 overflow-auto p-2">
+        <div className="flex-1 overflow-hidden p-2">
           {childrenArray[1]}
         </div>
       </div>
@@ -127,7 +127,7 @@ const MainLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
         <div className="h-12 flex items-center px-4 border-b border-geo-border">
           <h2 className="text-sm font-medium text-geo-text-primary">地图可视化</h2>
         </div>
-        <div className="flex-1 overflow-auto p-2 relative">
+        <div className="flex-1 overflow-hidden relative">
           {childrenArray[2]}
         </div>
       </div>
