@@ -169,8 +169,10 @@ export const uploadFile = async (req: Request, res: Response) => {
             };
             console.warn('Shapefile processing not implemented yet.');
         } else {
+            // 🚨【优化】使用异步读取
+            const content = await fsPromises.readFile(filePath, 'utf-8');
             // 对于 JSON/GEOJSON 文件，直接解析
-            parsedData = JSON.parse(fileContent);
+            parsedData = JSON.parse(content);
         }
 
         // 在数据库中创建文件节点记录
@@ -338,13 +340,27 @@ export const getFileContent = async (req: Request, res: Response) => {
             return res.status(400).json({ code: 400, message: '文件路径不存在，无法读取' });
         }
 
-        // 现在 TS 知道 fileNode.path 一定是 string 了，不会再报错
-        const content = fs.readFileSync(fileNode.path, 'utf-8');
+        // 🚨【修复点 2】使用绝对路径 (解决 Windows 下路径拼接问题)
+        // 数据库存的是 relative path (uploads/xx.json)，读取时要转为 absolute path
+        const absolutePath = path.resolve(process.cwd(), fileNode.path);
+
+        // 🚨【修复点 3】将 readFileSync 改为异步 await readFile，并增加文件丢失的捕获
+        let content: string;
+        try {
+            content = await fsPromises.readFile(absolutePath, 'utf-8');
+        } catch (readErr: any) {
+            // 如果是文件找不到 (ENOENT)，返回 404 而不是 500
+            if (readErr.code === 'ENOENT') {
+                console.error(`❌ 物理文件丢失: ${absolutePath}`);
+                return res.status(404).json({ code: 404, message: '物理文件丢失，请尝试重新上传或删除此记录' });
+            }
+            throw readErr; // 其他读取错误继续抛出
+        }
 
         // 🚨【修复部分】根据后缀名决定如何处理数据
         let responseData: any;
         // 获取后缀 (优先用数据库里的 extension，没有就从文件名取)
-        const ext = fileNode.extension || path.extname(fileNode.name).toLowerCase();
+        const ext = (fileNode.extension || path.extname(fileNode.name)).toLowerCase();
         if (ext === '.json' || ext === '.geojson') {
             try {
                 // 只有 JSON 才 parse

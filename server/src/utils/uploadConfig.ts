@@ -43,9 +43,17 @@ const storage = multer.diskStorage({
         // 然后，.toString('utf8') 再把这个最原始的二进制字节流，
         // 按照正确的 utf8 编码格式重新读一遍，变回正确的中文字符串。
         const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
-        // 添加时间戳
-        const timestamp = Date.now();
-        const filename = `${originalName}_${timestamp}`;
+
+        // 2. 🚨【关键修复】分离文件名和后缀
+        // 获取后缀 (例如 .json)
+        const ext = path.extname(originalName).toLowerCase();
+        // 获取不带后缀的文件名 (例如 data)
+        const basename = path.basename(originalName, ext);
+        // 3. 生成唯一文件名：文件名 + 时间戳 + 随机数 + 后缀
+        // 这样生成的物理文件可能是: data-17066882312-9921.json
+        // 既保证了唯一性，又保留了正确的 .json 后缀
+        const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1E9)}`;
+        const filename = `${basename}-${uniqueSuffix}${ext}`;
         // 告诉 Multer：“没问题（null），请把这个文件命名为刚才修复好的 filename 存在硬盘里。”
         cb(null, filename);
     }
