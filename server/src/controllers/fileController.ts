@@ -6,11 +6,94 @@ import path from 'path';
 // 不在同一个文件里面，所以不好将路径这个参数传递，只好通过 req 的方式，所以需要req                                                                                        │
 // Multer存到硬盘之后，但是控制器还不知道这个文件路径是什么，所以需要req                                                                                                   │
 // 先进行Multer存硬盘这个步骤，然后进行控制器处理数据这个步骤，并返回回复
-
 import FileNode from '../models/FileNode'; // 导入文件节点模型
+import vm from 'vm'; // 🚨 引入 Node.js 虚拟机模块，用于动态执行代码
+
+// ==========================================
+// 1. 全局环境补丁 (模拟浏览器环境)
+// ==========================================
+const g = global as any;
+if (!g.self) g.self = g;
+if (!g.window) g.window = g; // 有些库也会检查 window
+if (!g.document) g.document = {}; // 防止访问 document 报错
 
 // 🚨【修改】使用这种方式获取 promises，兼容性最好，防止 undefined 报错
 const fsPromises = fs.promises;
+
+/**
+ * 将 Node.js Buffer 转换为 ArrayBuffer
+ */
+function toArrayBuffer(buf: Buffer): ArrayBuffer {
+    const ab = new ArrayBuffer(buf.length);
+    const view = new Uint8Array(ab);
+    for (let i = 0; i < buf.length; ++i) {
+        view[i] = buf[i];
+    }
+    return ab;
+}
+
+/**
+ * 🚨【黑科技】手动加载 shpjs 库
+ * 绕过 package.json "exports" 限制，直接读取源码并执行
+ */
+async function loadShpLibrary() {
+    // 1. 尝试找到库文件的物理路径
+    const possiblePaths = [
+        path.join(process.cwd(), 'node_modules/shpjs/dist/shp.js'),
+        path.join(__dirname, '../../node_modules/shpjs/dist/shp.js'),
+        path.join(__dirname, '../node_modules/shpjs/dist/shp.js') // 容错
+    ];
+
+    let libPath = '';
+    for (const p of possiblePaths) {
+        if (fs.existsSync(p)) {
+            libPath = p;
+            break;
+        }
+    }
+
+    if (!libPath) {
+        throw new Error('无法在 node_modules 中找到 shpjs/dist/shp.js，请确认已 npm install shpjs');
+    }
+
+    console.log(`🔨 [Loader] 手动编译库文件: ${libPath}`);
+
+    // 2. 读取源码
+    const code = await fsPromises.readFile(libPath, 'utf-8');
+
+    // 3. 构造一个模拟的 CommonJS 环境
+    const sandbox = {
+        module: { exports: {} },
+        exports: {},
+        global: g,
+        self: g,
+        window: g,
+        ArrayBuffer: ArrayBuffer,
+        DataView: DataView,
+        Uint8Array: Uint8Array,
+        parseFloat: parseFloat,
+        parseInt: parseInt,
+        console: console,
+        setTimeout: setTimeout,
+        TextDecoder: TextDecoder // 解析 DBF 需要
+    };
+    
+    // 确保 module.exports 引用正确
+    sandbox.exports = sandbox.module.exports;
+
+    // 4. 在沙箱中执行代码
+    vm.createContext(sandbox);
+    vm.runInContext(code, sandbox);
+
+    // 5. 获取导出结果
+    const shp = sandbox.module.exports as any;
+
+    if (!shp || typeof shp.parseShp !== 'function') {
+        throw new Error('手动编译成功，但未检测到 parseShp 方法');
+    }
+
+    return shp;
+}
 
 /**
  * 🚨【修改】读取并解析文件
@@ -29,6 +112,49 @@ const readAndParseFile = async (filePath: string, dbExtension?: string) => {
     ext = ext.toLowerCase();
 
     console.log(`[FileController] 正在读取: ${path.basename(filePath)} | 识别后缀: ${ext}`);
+    
+    // 🚨 Shapefile 专用逻辑
+    if (ext === '.shp') {
+        console.log('🔄 [Parser] 开始解析 Shapefile:', path.basename(filePath));
+        
+        try {
+            // A. 加载库
+            const shp = await loadShpLibrary();
+
+            // B. 读取文件并转换格式
+            const shpNodeBuffer = await fsPromises.readFile(filePath);
+            const shpArrayBuffer = toArrayBuffer(shpNodeBuffer); // 关键！
+            
+            const dbfPath = filePath.replace(/\.shp$/i, '.dbf');
+            const prjPath = filePath.replace(/\.shp$/i, '.prj'); 
+
+            let dbfArrayBuffer;
+            try {
+                const dbfNodeBuffer = await fsPromises.readFile(dbfPath);
+                dbfArrayBuffer = toArrayBuffer(dbfNodeBuffer); // 关键！
+            } catch (e) {
+                throw new Error('缺少同名的 .dbf 文件');
+            }
+
+            let prjString;
+            try {
+                prjString = await fsPromises.readFile(prjPath, 'utf-8');
+            } catch (e) { /* 忽略 */ }
+
+            // C. 解析
+            const geojson = shp.combine([
+                shp.parseShp(shpArrayBuffer, prjString), 
+                shp.parseDbf(dbfArrayBuffer)
+            ]);
+            
+            console.log('✅ [Parser] Shapefile 解析成功!');
+            return { type: 'json', data: geojson };
+
+        } catch (e: any) {
+            console.error('❌ [Parser] 错误:', e);
+            throw new Error(`Shapefile 解析失败: ${e.message}`);
+        }
+    }
 
     const content = await fsPromises.readFile(filePath, 'utf-8');
     
@@ -118,72 +244,135 @@ export const uploadFile = async (req: Request, res: Response) => {
             parentId = null;
         }
 
+        // 🚨 req.files 是一个数组 (因为我们用了 upload.array)
+        const files = req.files as Express.Multer.File[];
+
         // 检查是否有文件被上传
-        if (!req.file) {
+        if (!files || files.length === 0) {
             return res.status(400).json({
                 code: 400,
                 message: '没有文件被上传',
                 data: null
             });
         }
+        // 🚨 为了防止文件名冲突（因为我们去掉了随机数），我们在这里统一给这一批文件重命名
+        // 生成一个统一的时间戳ID
+        const batchId = `${Date.now()}-${Math.round(Math.random() * 1000)}`;
+        // 存储处理结果
+        const processedFiles = [];
+        // 1. 先进行一次遍历，把所有文件重命名为 "原文件名_BatchId.后缀"
+        // 这样可以确保 .shp, .dbf, .shx 依然拥有相同的“前缀”，同时又全球唯一
+        const renamedFilesMap: Record<string, string> = {}; // 用于记录 .shp 文件的最终路径
+        
+        for (const file of files) {
+            // 修复乱码
+            const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
+            const ext = path.extname(originalName).toLowerCase();
+            const basename = path.basename(originalName, ext); // 不带后缀的文件名
 
-        // 🚨【关键修复】解决中文文件名乱码问题
-        // 原理：Multer 用 latin1 读取了 utf8 的字符，我们把它逆转回去
-        req.file.originalname = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+            // 新文件名: 比如 "MyMap_1768821.shp"
+            const newFilename = `${basename}_${batchId}${ext}`;
+            const newPath = path.join(path.dirname(file.path), newFilename);
 
-        // 获取上传文件的完整路径
-        const filePath = req.file.path;
+            // 重命名物理文件
+            await fsPromises.rename(file.path, newPath);
 
-        // 检查文件是否存在
-        if (!fs.existsSync(filePath)) {
-            return res.status(404).json({
-                code: 404,
-                message: '上传的文件未找到',
-                data: null
-            });
+            // 如果是 .shp 文件，我们把它作为“主文件”记录下来
+            if (ext === '.shp') {
+                renamedFilesMap['main'] = newPath;
+                renamedFilesMap['originalName'] = originalName;
+                renamedFilesMap['size'] = file.size.toString();
+                renamedFilesMap['mime'] = file.mimetype;
+            }
+            // 如果是单文件 (json/csv)，也记录
+            else if (['.json', '.geojson', '.csv'].includes(ext)) {
+                renamedFilesMap['main'] = newPath;
+                renamedFilesMap['originalName'] = originalName;
+                renamedFilesMap['size'] = file.size.toString();
+                renamedFilesMap['mime'] = file.mimetype;
+            }
         }
 
-        // 根据文件扩展名决定如何处理文件内容
-        const fileExtension = path.extname(req.file.originalname).toLowerCase();
-
-        let parsedData: any;
-
-        // 读取文件内容
-        const fileContent = fs.readFileSync(filePath, 'utf8');
-
-        // 根据文件类型进行不同的解析处理
-        if (fileExtension === '.csv') {
-            // 如果是 CSV 文件，需要先转换为 JSON 再进一步处理为 GeoJSON
-            // 这里暂时返回原始内容，实际应用中需要 CSV 到 GeoJSON 的转换逻辑
-            parsedData = {
-                type: 'FeatureCollection',
-                features: []
-            };
-            console.warn('CSV to GeoJSON conversion not implemented yet.');
-        } else if (fileExtension === '.shp') {
-            // Shapefile 需要特殊处理，通常需要额外的库如 shapefile-js
-            // 这里暂时返回空的 FeatureCollection
-            parsedData = {
-                type: 'FeatureCollection',
-                features: []
-            };
-            console.warn('Shapefile processing not implemented yet.');
-        } else {
-            // 🚨【优化】使用异步读取
-            const content = await fsPromises.readFile(filePath, 'utf-8');
-            // 对于 JSON/GEOJSON 文件，直接解析
-            parsedData = JSON.parse(content);
+        // 2. 存库逻辑
+        // 我们只在数据库里存 "主文件" (.shp 或 .json) 的记录
+        // 附属文件 (.dbf, .shx) 只要物理存在于硬盘即可，不需要数据库记录
+        if (!renamedFilesMap['main']) {
+            // 如果上传了一堆文件但没有 .shp 也没有 .json，说明不完整或不支持
+            // (比如只传了 .dbf)
+            return res.status(400).json({ code: 400, message: '上传不完整：Shapefile 必须包含 .shp 文件' });
         }
+        const mainFilePath = renamedFilesMap['main'];
+        const mainOriginalName = renamedFilesMap['originalName'];
+        const mainExt = path.extname(mainFilePath).toLowerCase();
+
+        // // 🚨【关键修复】解决中文文件名乱码问题
+        // // 原理：Multer 用 latin1 读取了 utf8 的字符，我们把它逆转回去
+        // req.file.originalname = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+        // // 获取上传文件的完整路径
+        // const filePath = req.file.path;
+        // // 检查文件是否存在
+        // if (!fs.existsSync(filePath)) {
+        //     return res.status(404).json({
+        //         code: 404,
+        //         message: '上传的文件未找到',
+        //         data: null
+        //     });
+        // }
+        // // 根据文件扩展名决定如何处理文件内容
+        // const fileExtension = path.extname(req.file.originalname).toLowerCase();
+        
+        // 3. 解析预览
+        let parsedData: any = null;
+        try {
+            // 如果是 .shp，readAndParseFile 内部会自动去找同名的 .dbf
+            const result = await readAndParseFile(mainFilePath, mainExt);
+            if (result.type === 'json') {
+                parsedData = result.data;
+            }
+        } catch (e: any) {
+            console.warn('预览解析警告:', e.message);
+            // 如果是 shp 解析失败，可能是缺了 dbf，这里可以选择报错，或者仅存文件不预览
+            if (mainExt === '.shp') {
+                return res.status(400).json({ code: 400, message: `Shapefile 解析失败: ${e.message}` });
+            }
+        }
+
+        // // 读取文件内容
+        // const fileContent = fs.readFileSync(filePath, 'utf8');
+
+        // // 根据文件类型进行不同的解析处理
+        // if (fileExtension === '.csv') {
+        //     // 如果是 CSV 文件，需要先转换为 JSON 再进一步处理为 GeoJSON
+        //     // 这里暂时返回原始内容，实际应用中需要 CSV 到 GeoJSON 的转换逻辑
+        //     parsedData = {
+        //         type: 'FeatureCollection',
+        //         features: []
+        //     };
+        //     console.warn('CSV to GeoJSON conversion not implemented yet.');
+        // } else if (fileExtension === '.shp') {
+        //     // Shapefile 需要特殊处理，通常需要额外的库如 shapefile-js
+        //     // 这里暂时返回空的 FeatureCollection
+        //     parsedData = {
+        //         type: 'FeatureCollection',
+        //         features: []
+        //     };
+        //     console.warn('Shapefile processing not implemented yet.');
+        // } else {
+        //     // 🚨【优化】使用异步读取
+        //     const content = await fsPromises.readFile(filePath, 'utf-8');
+        //     // 对于 JSON/GEOJSON 文件，直接解析
+        //     parsedData = JSON.parse(content);
+        // }
 
         // 在数据库中创建文件节点记录
         const fileNode = new FileNode({
-            name: req.file.originalname,      // 文件名
+            name: mainOriginalName,      // 文件名
             type: 'file',                     // 类型为文件
             parentId: parentId,                   // 默认放在根目录，后续可以根据需求调整
-            path: filePath,                   // 文件存储路径
-            size: req.file.size,              // 文件大小
-            extension: fileExtension,         // 文件扩展名
-            mimeType: req.file.mimetype       // MIME类型
+            path: mainFilePath,                   // 文件存储路径
+            size: Number(renamedFilesMap['size']),              // 文件大小
+            extension: mainExt,         // 文件扩展名
+            mimeType: renamedFilesMap['mime']       // MIME类型
         });
 
         // 保存到数据库
@@ -197,10 +386,10 @@ export const uploadFile = async (req: Request, res: Response) => {
             data: {
                 // 前端调用时会用到这些字段，名称注意要一致
                 _id: savedFileNode._id,        // 返回数据库记录的ID
-                fileName: req.file.originalname, // 返回原始文件名 (注意：这里是 fileName，不是 filename)
+                fileName: mainOriginalName, // 返回原始文件名 (注意：这里是 fileName，不是 filename)
                 geoJson: parsedData,            // 返回解析后的 GeoJSON 数据
-                fileSize: req.file.size,        // 文件大小
-                fileType: fileExtension         // 文件类型
+                fileSize: savedFileNode.size,        // 文件大小
+                fileType: mainExt         // 文件类型
             }
         });
 
@@ -327,9 +516,10 @@ export const getFileTree = async (req: Request, res: Response) => {
 // 这是一个新函数，用于前端点击文件时获取内容
 export const getFileContent = async (req: Request, res: Response) => {
     try {
+        // req.params 是 Request Parameters（请求参数）
         const { id } = req.params; 
-        
         const fileNode = await FileNode.findById(id);
+
         if (!fileNode) {
             return res.status(404).json({ code: 404, message: '文件记录不存在' });
         }
@@ -345,47 +535,48 @@ export const getFileContent = async (req: Request, res: Response) => {
         const absolutePath = path.resolve(process.cwd(), fileNode.path);
 
         // 🚨【修复点 3】将 readFileSync 改为异步 await readFile，并增加文件丢失的捕获
-        let content: string;
+
         try {
-            content = await fsPromises.readFile(absolutePath, 'utf-8');
-        } catch (readErr: any) {
-            // 如果是文件找不到 (ENOENT)，返回 404 而不是 500
-            if (readErr.code === 'ENOENT') {
-                console.error(`❌ 物理文件丢失: ${absolutePath}`);
-                return res.status(404).json({ code: 404, message: '物理文件丢失，请尝试重新上传或删除此记录' });
+            // 🚨 readAndParseFile 现在支持自动寻找 .dbf
+            const { data } = await readAndParseFile(absolutePath, fileNode.extension);
+            res.status(200).json({ code: 200, data: data });
+        } catch (readError: any) {
+            if (readError.message && readError.message.includes('物理文件')) {
+                return res.status(404).json({ code: 404, message: '物理文件丢失或不完整' });
             }
-            throw readErr; // 其他读取错误继续抛出
+            throw readError;
         }
 
-        // 🚨【修复部分】根据后缀名决定如何处理数据
-        let responseData: any;
-        // 获取后缀 (优先用数据库里的 extension，没有就从文件名取)
-        const ext = (fileNode.extension || path.extname(fileNode.name)).toLowerCase();
-        if (ext === '.json' || ext === '.geojson') {
-            try {
-                // 只有 JSON 才 parse
-                responseData = JSON.parse(content);
-            } catch (e) {
-                // 防止 JSON 文件本身损坏导致报错
-                return res.status(500).json({ code: 500, message: 'JSON 文件格式错误，解析失败' });
-            }
-        } else if (ext === '.csv') {
-            // ✅ 对于 CSV，暂时直接返回文本内容
-            // (如果你后续想在前端显示表格，可以在这里用 csv-parser 库把它转成 JSON 数组)
-            responseData = content; 
+        // // 🚨【修复部分】根据后缀名决定如何处理数据
+        // let responseData: any;
+        // // 获取后缀 (优先用数据库里的 extension，没有就从文件名取)
+        // const ext = (fileNode.extension || path.extname(fileNode.name)).toLowerCase();
+        // if (ext === '.json' || ext === '.geojson') {
+        //     try {
+        //         // 只有 JSON 才 parse
+        //         responseData = JSON.parse(content);
+        //     } catch (e) {
+        //         // 防止 JSON 文件本身损坏导致报错
+        //         return res.status(500).json({ code: 500, message: 'JSON 文件格式错误，解析失败' });
+        //     }
+        // } else if (ext === '.csv') {
+        //     // ✅ 对于 CSV，暂时直接返回文本内容
+        //     // (如果你后续想在前端显示表格，可以在这里用 csv-parser 库把它转成 JSON 数组)
+        //     responseData = content; 
             
-            // 或者，如果你想让前端拿到一个标准结构，可以暂时包装一下：
-            // responseData = { type: 'csv', raw: content };
-        } else {
-            // 其他类型默认返回文本
-            responseData = content;
-        }
+        //     // 或者，如果你想让前端拿到一个标准结构，可以暂时包装一下：
+        //     // responseData = { type: 'csv', raw: content };
+        // } else {
+        //     // 其他类型默认返回文本
+        //     responseData = content;
+        // }
 
-        res.status(200).json({
-            code: 200,
-            data: responseData
-        });
+        // res.status(200).json({
+        //     code: 200,
+        //     data: responseData
+        // });
     } catch (error: any) {
+        console.error('获取内容失败:', error);
         res.status(500).json({ code: 500, message: error.message });
     }
 };
@@ -460,31 +651,58 @@ export const deleteNode = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
         const node = await FileNode.findById(id);
-
         if (!node) return res.status(404).json({ code: 404, message: '文件不存在' });
+        
+        const deleteRecursive = async (pid: string) => {
+            const children = await FileNode.find({ parentId: pid });
+            for (const child of children) {
+                if (child.type === 'folder') await deleteRecursive(child._id.toString());
+                else await deletePhysicalFiles(child.path);
+
+                // 删除数据库记录
+                await FileNode.findByIdAndDelete(child._id);
+            }
+        };
+        const deletePhysicalFiles = async (filePath?: string) => {
+            if (!filePath) return;
+            const absPath = path.resolve(process.cwd(), filePath);
+            const ext = path.extname(absPath).toLowerCase();
+            
+            // 如果是 shp，顺便删掉关联文件
+            if (ext === '.shp') {
+                const extensions = ['.shp', '.shx', '.dbf', '.prj', '.cpg'];
+                for (const e of extensions) {
+                    const relatedPath = absPath.replace(/\.shp$/i, e);
+                    // 删除关联文件（在硬盘，物理删除）
+                    try { await fsPromises.unlink(relatedPath); } catch(e) {}
+                }
+            } else {
+                try { await fsPromises.unlink(absPath); } catch(e) {}
+            }
+        };
 
         // 如果是文件夹，先递归删除所有子内容
         if (node.type === 'folder') {
-            await deleteFolderRecursive(node._id.toString());
+            await deleteRecursive(node._id.toString());
         } else {
-            if (node.path) {
-                try {
-                    const absolutePath = path.resolve(process.cwd(), node.path);
-                    await fsPromises.access(absolutePath); // 检查存在性
-                    await fsPromises.unlink(absolutePath); // 执行删除
-                    console.log(`🗑️ 已物理删除文件: ${node.name}`);
-                } catch (error: any) {
-                    // 忽略文件不存在的错误
-                    if (error.code !== 'ENOENT') {
-                        console.error(`物理文件删除失败 [${node.name}]:`, error);
-                    }
-                }
-            }
+            // if (node.path) {
+            //     try {
+            //         const absolutePath = path.resolve(process.cwd(), node.path);
+            //         await fsPromises.access(absolutePath); // 检查存在性
+            //         await fsPromises.unlink(absolutePath); // 执行删除
+            //         console.log(`🗑️ 已物理删除文件: ${node.name}`);
+            //     } catch (error: any) {
+            //         // 忽略文件不存在的错误
+            //         if (error.code !== 'ENOENT') {
+            //             console.error(`物理文件删除失败 [${node.name}]:`, error);
+            //         }
+            //     }
+            // }
+            await deletePhysicalFiles(node.path);
         }
 
         // 删除节点本身
         await FileNode.findByIdAndDelete(id);
-
         res.status(200).json({ code: 200, message: '删除成功' });
     } catch (error: any) {
         res.status(500).json({ code: 500, message: error.message });

@@ -45,17 +45,39 @@ class GeoService {
    * const file = fileInput.files[0];
    * const result = await uploadGeoData(file);
    * console.log(result.data.geoJson); // 处理后的 GeoJSON 数据
+   * 
+   * 🚨【修改】上传地理数据文件 (支持多文件)
+   * @param {FileList | File[]} files - 用户选择的文件列表
    */
   // : Promise<UploadResponse>是输出承诺，会返回一个UploadResponse类型的数据
   // file是浏览器原生提供的文件对象(通常通过文件输入框获取)
-  async uploadGeoData(file: File, parentId?: string): Promise<UploadResponse> {
+  async uploadGeoData(files: FileList | File[], parentId?: string): Promise<UploadResponse> {
     try {
+      const fileArray = Array.from(files); // 转为标准数组
+      // if (fileArray.length === 0) throw new Error('请选择文件');
+      // 1. 检查文件类型
+      const hasShp = fileArray.some(f => f.name.toLowerCase().endsWith('.shp'));
+      // 2. 如果包含了 .shp，则必须进行完整性校验
+      if (hasShp) {
+          const hasDbf = fileArray.some(f => f.name.toLowerCase().endsWith('.dbf'));
+          const hasShx = fileArray.some(f => f.name.toLowerCase().endsWith('.shx'));
+          
+          if (!hasDbf || !hasShx) {
+              throw new Error('上传 Shapefile 时，必须同时选中 .shp, .dbf, .shx 三个文件！');
+          }
+      }
+
+
       // 构建表单数据，用于文件上传
       const formData = new FormData();
-      
+
+      // 🚨 注意：这里循环 append，字段名统一为 'files' (对应后端的 upload.array('files'))
       // 将文件添加到表单数据中，字段名为 'file'
       // 第一个'file'与后端 Multer 中间件里的 upload.single('file')一致
-      formData.append('file', file);
+      // formData.append('file', file);
+      fileArray.forEach(file => {
+          formData.append('files', file);
+      });
 
       // ✅ 新增：如果有 parentId，就塞进表单发给后端
       if (parentId) {
@@ -200,4 +222,4 @@ class GeoService {
 export const geoService = new GeoService();
 
 // 导出 uploadGeoData 函数作为便捷方法
-export const uploadGeoData = (file: File) => geoService.uploadGeoData(file);
+export const uploadGeoData = (files: FileList | File[]) => geoService.uploadGeoData(files);

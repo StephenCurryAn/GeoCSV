@@ -44,18 +44,21 @@ const storage = multer.diskStorage({
         // 按照正确的 utf8 编码格式重新读一遍，变回正确的中文字符串。
         const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
 
-        // 2. 🚨【关键修复】分离文件名和后缀
-        // 获取后缀 (例如 .json)
-        const ext = path.extname(originalName).toLowerCase();
-        // 获取不带后缀的文件名 (例如 data)
-        const basename = path.basename(originalName, ext);
-        // 3. 生成唯一文件名：文件名 + 时间戳 + 随机数 + 后缀
-        // 这样生成的物理文件可能是: data-17066882312-9921.json
-        // 既保证了唯一性，又保留了正确的 .json 后缀
-        const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1E9)}`;
-        const filename = `${basename}-${uniqueSuffix}${ext}`;
-        // 告诉 Multer：“没问题（null），请把这个文件命名为刚才修复好的 filename 存在硬盘里。”
-        cb(null, filename);
+        // // 2. 🚨【关键修复】分离文件名和后缀
+        // // 获取后缀 (例如 .json)
+        // const ext = path.extname(originalName).toLowerCase();
+        // // 获取不带后缀的文件名 (例如 data)
+        // const basename = path.basename(originalName, ext);
+        // // 3. 生成唯一文件名：文件名 + 时间戳 + 随机数 + 后缀
+        // // 这样生成的物理文件可能是: data-17066882312-9921.json
+        // // 既保证了唯一性，又保留了正确的 .json 后缀
+        // const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1E9)}`;
+        // const filename = `${basename}-${uniqueSuffix}${ext}`;
+        // // 告诉 Multer：“没问题（null），请把这个文件命名为刚才修复好的 filename 存在硬盘里。”
+        // cb(null, filename);
+
+        // 保持原始文件名（针对shp类型数据，要是各个文件名称不一样，有点麻烦）
+        cb(null, originalName);
     }
 });
 
@@ -64,11 +67,12 @@ const storage = multer.diskStorage({
 // file: 这里拿到的不是文件内容，而是文件的元数据（Metadata），比如文件名 (originalname)、MIME 类型 (mimetype) 等
 // TypeScript 类型：multer.FileFilterCallback 是为了确保调用 cb 时传的参数格式是正确的（第一个参数是错误对象或 null，第二个是布尔值）
 const fileFilter = (req: Express.Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+    const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
     // 获取文件扩展名并转换为小写
     const fileExtension = path.extname(file.originalname).toLowerCase();
     
     // 定义允许的文件类型
-    const allowedExtensions = ['.json', '.geojson', '.csv', '.shp' ,'.zip'];
+    const allowedExtensions = ['.json', '.geojson', '.csv', '.shp', '.shx', '.dbf', '.prj', '.cpg'];
     
     // 检查文件扩展名是否在允许列表中
     if (allowedExtensions.includes(fileExtension)) {
@@ -86,8 +90,8 @@ const upload = multer({
     storage: storage,           // 使用上面定义的存储配置
     fileFilter: fileFilter,     // 使用上面定义的文件过滤器
     limits: {
-        fileSize: 500 * 1024 * 1024, // 限制单个文件大小为 500MB
-        files: 1                   // 限制每次只能上传 1 个文件
+        fileSize: 1000 * 1024 * 1024, // 限制单个文件大小为 1000MB
+        // files: 1                   // 限制每次只能上传 1 个文件
     }
 });
 

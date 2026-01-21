@@ -1,4 +1,6 @@
-// server/src/server.ts
+// 后端入口文件
+// 🚨【关键修复】Polyfill: 解决 shpjs 等库在 Node 环境报 "self is not defined" 的问题
+(global as any).self = global;
 import express, { Request, Response } from 'express';
 import cors from 'cors'; // 跨域资源共享
 import fileRoutes from './routes/fileRoutes'; // 导入文件路由

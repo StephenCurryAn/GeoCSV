@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Tree, Upload, Button, message, Empty, Modal, Input, Dropdown, type MenuProps } from 'antd'; // 引入 Empty 组件美化空状态
+import { Tree, Button, message, Empty, Modal, Input, Dropdown, type MenuProps } from 'antd'; // 引入 Empty 组件美化空状态
 import { FolderAddOutlined, CloudUploadOutlined, FileTextOutlined, FileImageOutlined, TableOutlined, FolderFilled, CheckOutlined, DownOutlined, DeleteOutlined, EditOutlined, ExclamationCircleOutlined} from '@ant-design/icons';
 import { geoService, type UploadResponse } from '../../../services/geoService';
 
@@ -36,6 +36,8 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
   const inputRef = useRef<any>(null); // 用于自动聚焦输入框
+  // 🚨【新增】用于触发原生文件选择的 Ref
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // TreeNode[]表示 TreeNode 类型的数组
 
@@ -224,108 +226,181 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
     });
   };
 
+  // /**
+  //  * 自定义上传请求
+  //  */
+  // const customUploadRequest = async (options: any) => {
+  //   // 解构赋值，得到需要的参数
+  //   const { file, onSuccess, onError } = options;
+  //   //// 0表示持续显示加载中，不要关闭
+  //   // const hide = message.loading('解析中...', 0);
+  //   // 类型断言，告诉 TypeScrip "AntD 传进来的 file 是 File 类型"
+  //   const targetFile = file as File; // 类型断言，告诉 TypeScript 这个 file 是浏览器的 File 对象
+
+  //   try {
+  //     // 🚨【关键修改 1】上传前先计算 parentId
+  //     // 逻辑和新建文件夹一模一样：看看当前选中的是不是文件夹
+  //     const currentSelectedKey = selectedKeys[0];
+  //     let targetParentId = undefined; // 默认根目录
+
+  //     if (currentSelectedKey) {
+  //       const targetNode = findNodeByKey(treeData, currentSelectedKey);
+  //       // 如果选中了文件夹，就以此为父ID
+  //       if (targetNode && targetNode.type === 'folder') {
+  //         targetParentId = currentSelectedKey;
+  //       }
+  //     }
+  //     // 🚨【关键修改 2】把 targetParentId 传给 uploadGeoData
+  //     // 假设你的 geoService 签名是 uploadGeoData(file, parentId?)
+
+  //     const response: UploadResponse = await geoService.uploadGeoData(targetFile, targetParentId);
+  //     // hide();
+
+  //     if (response.code === 200 && response.data) {
+  //       // 1. AntD 上传状态设为完成
+  //       // &&是逻辑与，意思是“如果前面成立，就执行后面”
+  //       onSuccess && onSuccess(response);
+
+  //       // 2. 回调父组件（通知父组件 (App) 去画地图，，，）
+  //       onDataLoaded(response.data.fileName, response.data.geoJson);
+
+  //       // 3. 准备新节点对象（更新）
+  //       const newFileNode: TreeNode = {
+  //         key: response.data._id, // key 保持唯一
+  //         title: response.data.fileName, // 直接使用文件名，不加 emoji，由 icon 属性控制
+  //         type: 'file',
+  //         rawFileName: response.data.fileName,
+  //         isLeaf: true
+  //       };
+
+  //       // 4. 更新树数据 (Immutable update)
+  //       setTreeData(prev => {
+  //         const currentSelectedKey = selectedKeys[0];
+          
+  //         // B. 判断是否需要放入文件夹
+  //         let shouldInsertToFolder = false;
+          
+  //         if (currentSelectedKey) {
+  //           // 只有当“选中了东西”且“选中的是文件夹”时，才放入文件夹
+  //           const targetNode = findNodeByKey(prev, currentSelectedKey);
+  //           if (targetNode && targetNode.type === 'folder') {
+  //             shouldInsertToFolder = true;
+  //           }
+  //         }
+  //         if (shouldInsertToFolder) {
+  //           // 放入选中的文件夹 (递归操作)
+  //           return insertNodeToTree(prev, currentSelectedKey, newFileNode);
+  //         } else {
+  //           // 放入根目录 (默认行为)
+  //           // 这里我们用 [...prev, newFileNode] 把它放到最后
+  //           // 或者用 [newFileNode, ...prev] 把它放到最前
+  //           return [...prev, newFileNode];
+  //         }
+  //         // // 之前的简单逻辑，直接放到根目录
+  //         // // 创建副本（Copy）,避免直接修改状态，“浅拷贝”
+  //         // const newData = [...prev];
+
+  //         // if (newData.length > 0 && newData[0].type === 'folder') {
+            
+  //         //   // 如果根节点没有 children 属性，先初始化为空数组，以防报错 
+  //         //   // 然后将新文件节点添加到根节点的 children 中
+  //         //    if (!newData[0].children) newData[0].children = [];
+  //         //    newData[0].children.push(newFileNode);
+
+  //         // } else {
+  //         //    newData.push(newFileNode);
+  //         // }
+  //         // return newData;
+  //       });
+
+  //       message.success(`${targetFile.name} 上传成功！`);
+  //       // 选中新上传的文件
+  //       setSelectedKeys([newFileNode.key]);
+
+  //       // 上传成功后，重新获取文件树数据以同步后端数据库状态
+  //       setTimeout(() => {
+  //         fetchFileTree();
+  //       }, 500); // 延迟执行，确保后端有时间处理数据
+  //     } else {
+  //       throw new Error(response.message || '上传未返回有效数据');
+  //     }
+  //   } catch (error: any) {
+  //     onError && onError(error);
+  //     message.error(`上传失败: ${error.message}`);
+  //     console.error(error);
+  //   }
+  // };
+
   /**
-   * 自定义上传请求
+   * 🚨【新增】处理文件选择 (替代 customUploadRequest)
    */
-  const customUploadRequest = async (options: any) => {
-    // 解构赋值，得到需要的参数
-    const { file, onSuccess, onError } = options;
-    //// 0表示持续显示加载中，不要关闭
-    // const hide = message.loading('解析中...', 0);
-    // 类型断言，告诉 TypeScrip "AntD 传进来的 file 是 File 类型"
-    const targetFile = file as File; // 类型断言，告诉 TypeScript 这个 file 是浏览器的 File 对象
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    // 获取 targetParentId
+    const currentSelectedKey = selectedKeys[0];
+    let targetParentId = undefined;
+    if (currentSelectedKey) {
+        const targetNode = findNodeByKey(treeData, currentSelectedKey);
+        if (targetNode && targetNode.type === 'folder') {
+            targetParentId = currentSelectedKey;
+        }
+    }
+
+    const hideLoading = message.loading('正在上传并解析...', 0);
 
     try {
-      // 🚨【关键修改 1】上传前先计算 parentId
-      // 逻辑和新建文件夹一模一样：看看当前选中的是不是文件夹
-      const currentSelectedKey = selectedKeys[0];
-      let targetParentId = undefined; // 默认根目录
+        // 🚨 调用 geoService 里的新方法 (支持 FileList)
+        const response: UploadResponse = await geoService.uploadGeoData(files, targetParentId);
+        
+        hideLoading();
 
-      if (currentSelectedKey) {
-        const targetNode = findNodeByKey(treeData, currentSelectedKey);
-        // 如果选中了文件夹，就以此为父ID
-        if (targetNode && targetNode.type === 'folder') {
-          targetParentId = currentSelectedKey;
-        }
-      }
-      // 🚨【关键修改 2】把 targetParentId 传给 uploadGeoData
-      // 假设你的 geoService 签名是 uploadGeoData(file, parentId?)
-
-      const response: UploadResponse = await geoService.uploadGeoData(targetFile, targetParentId);
-      // hide();
-
-      if (response.code === 200 && response.data) {
-        // 1. AntD 上传状态设为完成
-        // &&是逻辑与，意思是“如果前面成立，就执行后面”
-        onSuccess && onSuccess(response);
-
-        // 2. 回调父组件（通知父组件 (App) 去画地图，，，）
-        onDataLoaded(response.data.fileName, response.data.geoJson);
-
-        // 3. 准备新节点对象（更新）
-        const newFileNode: TreeNode = {
-          key: response.data._id, // key 保持唯一
-          title: response.data.fileName, // 直接使用文件名，不加 emoji，由 icon 属性控制
-          type: 'file',
-          rawFileName: response.data.fileName,
-          isLeaf: true
-        };
-
-        // 4. 更新树数据 (Immutable update)
-        setTreeData(prev => {
-          const currentSelectedKey = selectedKeys[0];
-          
-          // B. 判断是否需要放入文件夹
-          let shouldInsertToFolder = false;
-          
-          if (currentSelectedKey) {
-            // 只有当“选中了东西”且“选中的是文件夹”时，才放入文件夹
-            const targetNode = findNodeByKey(prev, currentSelectedKey);
-            if (targetNode && targetNode.type === 'folder') {
-              shouldInsertToFolder = true;
-            }
-          }
-          if (shouldInsertToFolder) {
-            // 放入选中的文件夹 (递归操作)
-            return insertNodeToTree(prev, currentSelectedKey, newFileNode);
-          } else {
-            // 放入根目录 (默认行为)
-            // 这里我们用 [...prev, newFileNode] 把它放到最后
-            // 或者用 [newFileNode, ...prev] 把它放到最前
-            return [...prev, newFileNode];
-          }
-          // // 之前的简单逻辑，直接放到根目录
-          // // 创建副本（Copy）,避免直接修改状态，“浅拷贝”
-          // const newData = [...prev];
-
-          // if (newData.length > 0 && newData[0].type === 'folder') {
+        if (response.code === 200 && response.data) {
+            message.success(`${response.data.fileName} 上传成功！`);
             
-          //   // 如果根节点没有 children 属性，先初始化为空数组，以防报错 
-          //   // 然后将新文件节点添加到根节点的 children 中
-          //    if (!newData[0].children) newData[0].children = [];
-          //    newData[0].children.push(newFileNode);
+            // 1. 通知父组件显示数据
+            if (response.data.geoJson) {
+                onDataLoaded(response.data.fileName, response.data.geoJson);
+            }
 
-          // } else {
-          //    newData.push(newFileNode);
-          // }
-          // return newData;
-        });
+            // 2. 构造新节点
+            const newFileNode: TreeNode = {
+                key: response.data._id,
+                title: response.data.fileName,
+                type: 'file',
+                rawFileName: response.data.fileName,
+                isLeaf: true
+            };
 
-        message.success(`${targetFile.name} 上传成功！`);
-        // 选中新上传的文件
-        setSelectedKeys([newFileNode.key]);
+            // 3. 更新树
+            setTreeData(prev => {
+                if (targetParentId) {
+                    return insertNodeToTree(prev, targetParentId, newFileNode);
+                } else {
+                    return [...prev, newFileNode];
+                }
+            });
 
-        // 上传成功后，重新获取文件树数据以同步后端数据库状态
-        setTimeout(() => {
-          fetchFileTree();
-        }, 500); // 延迟执行，确保后端有时间处理数据
-      } else {
-        throw new Error(response.message || '上传未返回有效数据');
-      }
+            // 4. 选中新文件
+            setSelectedKeys([newFileNode.key]);
+            
+            // 5. 稍微延迟刷新全树
+            setTimeout(fetchFileTree, 500);
+
+        } else {
+            throw new Error(response.message || '上传未返回有效数据');
+        }
+
     } catch (error: any) {
-      onError && onError(error);
-      message.error(`上传失败: ${error.message}`);
-      console.error(error);
+        hideLoading();
+        message.error(`上传失败: ${error.message}`);
+        console.error(error);
+    } finally {
+        // 🚨 必须清空 input 的值，否则删除文件后再次上传同名文件不会触发 onChange
+        if (fileInputRef.current) {
+            fileInputRef.current.value = '';
+        }
     }
   };
 
@@ -499,7 +574,7 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
           </Button>
 
           {/* 上传数据 */}
-          <Upload
+          {/* <Upload
             customRequest={customUploadRequest}
             showUploadList={false}
             accept=".json,.geojson,.csv"
@@ -512,7 +587,27 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
             >
               上传
             </Button>
-          </Upload>
+          </Upload> */}
+          {/* 🚨【核心修改】1. 隐藏的原生 input */}
+          <input 
+            type="file" 
+            ref={fileInputRef}
+            style={{ display: 'none' }}
+            multiple // 允许选多个
+            accept=".json,.geojson,.csv,.shp,.dbf,.shx,.prj,.cpg"
+            onChange={handleFileChange}
+          />
+
+          {/* 🚨【核心修改】2. 触发 input 点击的按钮 */}
+          <Button
+              type="primary"
+              size="small"
+              icon={<CloudUploadOutlined />}
+              className="text-gray-200! bg-blue-600 hover:bg-blue-500 border-none text-xs shadow-md"
+              onClick={() => fileInputRef.current?.click()} // 触发点击
+          >
+              上传
+          </Button>
         </div>
       </div>
 

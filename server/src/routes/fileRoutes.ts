@@ -19,7 +19,7 @@ const router = Router();
 // 这里面的'file'，是前端 form-data 里那个字段的名字
 // single 方法表示只处理单个文件上传
 // http://localhost:3000/api/files/upload
-router.post('/upload', upload.single('file'), uploadFile);
+router.post('/upload', upload.array('files'), uploadFile);
 
 /**
  * POST /folder
