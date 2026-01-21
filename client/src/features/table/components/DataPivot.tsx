@@ -5,7 +5,7 @@ import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-alpine.css'; 
 // ... 引入 antd 组件
 import { Empty, Button, Space, Popconfirm, message } from 'antd';
-import { PlusOutlined, DeleteOutlined, TableOutlined, MinusSquareOutlined } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, TableOutlined, MinusSquareOutlined, DownloadOutlined } from '@ant-design/icons';
 // 🚨【新增】引入 center 计算
 import { center } from '@turf/turf';
 
@@ -46,14 +46,20 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
 
     const ext = fileName.split('.').pop()?.toLowerCase();
     
-    if (ext === 'json' || ext === 'geojson') {
+    if (
+        ext === 'json' || 
+        ext === 'geojson' || 
+        ext === 'shp' || 
+        (data.type === 'FeatureCollection' && Array.isArray(data.features))
+    ) {
       processGeoJSON(data);
     } else {
+      // 处理普通数组 (CSV/Excel 转换来的)
       if (Array.isArray(data)) {
         processArrayData(data);
       }
     }
-    // 其他格式省略...
+
   }, [data, fileName]);
 
   // 🚨【核心修复】监听 selectedFeature，同步高亮表格行
@@ -162,6 +168,22 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
       setColumnDefs(generateColumnDefs(arr));
   }
 
+  // 🚨【修改 2】新增：导出 CSV 处理函数
+  const handleExportCSV = () => {
+    if (gridRef.current && gridRef.current.api) {
+        // 使用 AG Grid 原生导出功能
+        gridRef.current.api.exportDataAsCsv({
+            // 自定义文件名：原文件名_时间戳.csv
+            fileName: `${fileName || 'data'}_${Date.now()}.csv`,
+            // 仅导出可见列 (如果不想要隐藏列，设为 true)
+            allColumns: false, 
+        });
+        message.success('正在导出 CSV...');
+    } else {
+        message.error('表格未就绪，无法导出');
+    }
+  };
+
   if (!data || rowData.length === 0) {
     return (
       <div className="h-full flex flex-col items-center justify-center bg-[#1f2937] rounded text-gray-400">
@@ -186,6 +208,17 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
         
         {/* 操作按钮组 */}
         <Space size="small">
+            {/* 🚨【修改 3】在“增行”左边添加“导出CSV”按钮 */}
+            <Button 
+                size="small" 
+                icon={<DownloadOutlined />} 
+                className="bg-green-700! text-gray-200! border-green-600! hover:bg-green-600! hover:border-green-500!"
+                onClick={handleExportCSV}
+                disabled={rowData.length === 0} // 无数据时禁用
+            >
+                导出CSV
+            </Button>
+
             <Button 
                 type="primary" 
                 size="small" 
