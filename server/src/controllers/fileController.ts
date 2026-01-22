@@ -34,8 +34,108 @@ function toArrayBuffer(buf: Buffer): ArrayBuffer {
 }
 
 /**
+ * 🛠️【新增】将 GeoJSON 转换为 CSV 字符串
+ * 用于将修改后的数据写回 CSV 文件
+ */
+function geoJSONToCSV(geoJSON: any): string {
+    if (!geoJSON || !Array.isArray(geoJSON.features)) return '';
+
+    // 将 FeatureCollection 扁平化为数组
+    const flatData = geoJSON.features.map((feature: any) => {
+        // 1. 获取所有属性
+        const row = { ...feature.properties };
+        
+        // 移除内部字段 (如 __csv_id)
+        Object.keys(row).forEach(k => {
+            if (k.startsWith('__')) delete row[k];
+        });
+
+        // 2. 处理几何信息
+        if (feature.geometry) {
+            if (feature.geometry.type === 'Point' && Array.isArray(feature.geometry.coordinates)) {
+                // 如果是点，确保有经纬度列
+                // 优先使用原有的 lat/lon 字段名，如果没有则新建
+                if (!row.lng && !row.longitude && !row.x) row.lng = feature.geometry.coordinates[0];
+                if (!row.lat && !row.latitude && !row.y) row.lat = feature.geometry.coordinates[1];
+            } else {
+                // 如果是面/线，将坐标存入 geometry 列
+                // 这里我们统一用 "geometry" 作为列名
+                row['geometry'] = JSON.stringify(feature.geometry.coordinates);
+            }
+        }
+        return row;
+    });
+
+    // 使用 PapaParse 反向解析为 CSV 字符串
+    return Papa.unparse(flatData);
+}
+
+/**
+ * 🛠️【智能保存】根据文件类型决定保存策略
+ * 并同步更新数据库中的文件大小 (size)
+ */
+const saveDataSmart = async (fileNode: any, geoJsonData: any) => {
+    const absolutePath = path.resolve(process.cwd(), fileNode.path);
+    const ext = fileNode.extension.toLowerCase();
+    
+    // 定义一个变量来存最终的文件路径，用于计算大小
+    let finalPath = absolutePath;
+
+    // 策略 A: CSV -> 转回 CSV 文本
+    if (ext === '.csv') {
+        const csvString = geoJSONToCSV(geoJsonData);
+        await fsPromises.writeFile(absolutePath, csvString, 'utf-8');
+        console.log(`💾 CSV 文件已更新: ${fileNode.name}`);
+    }
+
+    // 策略 B: SHP -> 迁移为 JSON
+    else if (ext === '.shp') {
+        console.log(`⚠️ 检测到 SHP 编辑，正在转换为 GeoJSON 以便保存...`);
+        
+        const dir = path.dirname(absolutePath);
+        const basename = path.basename(absolutePath, '.shp'); 
+        const newFileName = `${basename}.json`;
+        const newPath = path.join(dir, newFileName);
+
+        // 写入 JSON
+        await fsPromises.writeFile(newPath, JSON.stringify(geoJsonData, null, 2), 'utf-8');
+
+        // 删除旧 SHP 文件
+        const extensions = ['.shp', '.shx', '.dbf', '.prj', '.cpg'];
+        for (const e of extensions) {
+            const oldFile = path.join(dir, `${basename}${e}`);
+            try { await fsPromises.unlink(oldFile); } catch(e) {}
+        }
+
+        // 更新节点信息
+        fileNode.path = path.relative(process.cwd(), newPath);
+        fileNode.extension = '.json';
+        fileNode.name = newFileName;
+        fileNode.mimeType = 'application/json';
+        
+        finalPath = newPath; // 更新最终路径
+        console.log(`✅ SHP 已成功迁移为 JSON: ${newFileName}`);
+    }
+
+    // 策略 C: JSON -> 直接保存
+    else {
+        await fsPromises.writeFile(absolutePath, JSON.stringify(geoJsonData, null, 2), 'utf-8');
+    }
+
+    // 🚨【新增】重新计算文件大小并更新到数据库对象
+    try {
+        const stats = await fsPromises.stat(finalPath);
+        fileNode.size = stats.size; // 更新大小
+    } catch (e) {
+        console.warn('无法更新文件大小统计');
+    }
+
+    return fileNode;
+};
+
+/**
  * 🚨【升级】CSV 转 GeoJSON 核心逻辑
- * 支持：1. 经纬度列 (Point) 2. 几何数据列 (Polygon/Line/Point)
+ * 修复：允许保留没有几何数据的普通行（防止增行后不显示）
  */
 function parseCsvToGeoJSON(csvString: string) {
     const result = Papa.parse(csvString, {
@@ -50,11 +150,8 @@ function parseCsvToGeoJSON(csvString: string) {
     const headers = result.meta.fields || Object.keys(data[0]);
     
     // --- 1. 定义关键词 ---
-    // A. 几何列关键词 (处理面、线、复杂点)
     const geomKeywords = ['geometry', 'geom', 'wkt', 'the_geom', '几何', '几何数据', '几何坐标数据', '几何坐标数据 (geometry)'];
-    // B. 类型列关键词 (辅助判断是 Polygon 还是 LineString)
     const typeKeywords = ['type', 'geometrytype', '图层类型', '类型', 'shapetype'];
-    // C. 经纬度列关键词 (处理简单点)
     const latKeywords = ['lat', 'latitude', 'wd', 'y', 'y_coord', '纬度'];
     const lonKeywords = ['lon', 'lng', 'longitude', 'jd', 'x', 'x_coord', '经度'];
 
@@ -64,60 +161,72 @@ function parseCsvToGeoJSON(csvString: string) {
     const latKey = headers.find(h => latKeywords.includes(h.toLowerCase()));
     const lonKey = headers.find(h => lonKeywords.includes(h.toLowerCase()));
 
-    // --- 3. 策略 A: 优先处理 "几何列" (通常包含更丰富的信息) ---
+    // --- 3. 策略 A: 优先处理 "几何列" ---
     if (geomKey) {
-        console.log(`✅ [CSV Parser] 发现几何列: [${geomKey}]，按复杂几何体处理`);
+        console.log(`✅ [CSV Parser] 发现几何列: [${geomKey}]`);
         
         const features = data.map((row, index) => {
             const rawGeom = row[geomKey];
-            if (!rawGeom) return null;
+            const properties = { ...row };
+            // 确保有 ID
+            properties.id = properties.id || properties.OSM_ID || `csv_${index}`;
+
+            // 🚨【关键修复】如果几何数据为空，保留该行，但 geometry 为 null
+            if (!rawGeom) {
+                // 如果需要，可以把 geomKey 从属性中删掉，或者保留它
+                // delete properties[geomKey]; 
+                return {
+                    type: 'Feature',
+                    geometry: null, // 空几何
+                    properties: properties
+                };
+            }
 
             let coordinates = null;
             let geoType = 'Unknown';
 
-            // 尝试解析几何数据 (假定是 JSON 字符串，如 "[[[118...]]]")
             try {
                 if (typeof rawGeom === 'string') {
-                    // 处理可能的 JSON 格式
                     if (rawGeom.trim().startsWith('[') || rawGeom.trim().startsWith('{')) {
                         coordinates = JSON.parse(rawGeom);
                     } 
-                    // (未来可扩展: 支持 WKT 格式，如 "POLYGON((...))")
                 } else if (Array.isArray(rawGeom)) {
                     coordinates = rawGeom;
                 }
             } catch (e) {
-                // 解析失败，跳过
-                return null;
+                // 解析出错也当作无几何数据保留，而不是丢弃
+                return {
+                    type: 'Feature',
+                    geometry: null,
+                    properties: properties
+                };
             }
 
-            if (!coordinates) return null;
+            if (!coordinates) {
+                 return {
+                    type: 'Feature',
+                    geometry: null,
+                    properties: properties
+                };
+            }
 
-            // 确定几何类型
-            // 1. 优先读取 "图层类型" 列
+            // ... (原有的几何类型推断逻辑保持不变) ...
             if (typeKey && row[typeKey]) {
-                geoType = row[typeKey]; // 例如 "Polygon"
-                // 简单的名称清洗 (有些软件导出可能是 "Esri Polygon" 之类)
+                geoType = row[typeKey]; 
                 if (geoType.toLowerCase().includes('polygon')) geoType = 'Polygon';
                 if (geoType.toLowerCase().includes('line')) geoType = 'LineString';
                 if (geoType.toLowerCase().includes('point')) geoType = 'Point';
-            } 
-            // 2. 如果没有类型列，根据坐标数组深度推断
-            else {
+            } else {
                 if (Array.isArray(coordinates)) {
                     const depth = getArrayDepth(coordinates);
                     if (depth === 1) geoType = 'Point';
-                    else if (depth === 2) geoType = 'LineString'; // 或 MultiPoint
-                    else if (depth === 3) geoType = 'Polygon';    // 或 MultiLineString
+                    else if (depth === 2) geoType = 'LineString';
+                    else if (depth === 3) geoType = 'Polygon';
                     else if (depth === 4) geoType = 'MultiPolygon';
                 }
             }
 
-            // 移除 geometry 字段本身，避免属性表太冗余
-            const properties = { ...row };
-            delete properties[geomKey]; 
-            // 注入 ID
-            properties.id = properties.id || properties.OSM_ID || `csv_${index}`;
+            delete properties[geomKey]; // 移除原始大字段，避免冗余
 
             return {
                 type: 'Feature',
@@ -135,14 +244,25 @@ function parseCsvToGeoJSON(csvString: string) {
         };
     }
 
-    // --- 4. 策略 B: 处理 "经纬度列" (简单点数据) ---
+    // --- 4. 策略 B: 处理 "经纬度列" ---
     if (latKey && lonKey) {
-        console.log(`✅ [CSV Parser] 发现经纬度列: [${lonKey}, ${latKey}]，按点数据处理`);
+        console.log(`✅ [CSV Parser] 发现经纬度列: [${lonKey}, ${latKey}]`);
         
         const features = data.map((row, index) => {
             const lat = parseFloat(row[latKey]);
             const lon = parseFloat(row[lonKey]);
-            if (isNaN(lat) || isNaN(lon)) return null;
+            
+            // 🚨【关键修复】如果经纬度无效，保留行，geometry 设为 null
+            if (isNaN(lat) || isNaN(lon)) {
+                return {
+                    type: 'Feature',
+                    geometry: null,
+                    properties: {
+                        ...row,
+                        id: row.id || `csv_${index}`
+                    }
+                };
+            }
 
             return {
                 type: 'Feature',
@@ -320,18 +440,18 @@ const readAndParseFile = async (filePath: string, dbExtension?: string) => {
     return { type: 'text', data: content };
 };
 
-/**
- * 保存文件
- */
-const saveFile = async (filePath: string, type: string, data: any) => {
-    if (type === 'json') {
-        await fsPromises.writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
-    } else {
-        if (typeof data === 'string') {
-            await fsPromises.writeFile(filePath, data, 'utf-8');
-        }
-    }
-};
+// /**
+//  * 保存文件
+//  */
+// const saveFile = async (filePath: string, type: string, data: any) => {
+//     if (type === 'json') {
+//         await fsPromises.writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
+//     } else {
+//         if (typeof data === 'string') {
+//             await fsPromises.writeFile(filePath, data, 'utf-8');
+//         }
+//     }
+// };
 
 
 /**
@@ -389,6 +509,11 @@ export const uploadFile = async (req: Request, res: Response) => {
         if (parentId === 'null' || parentId === 'undefined' || parentId === '') {
             parentId = null;
         }
+        
+        // 🚨【新增】支持前端传递自定义名称 (clean name)
+        // 如果前端在 FormData 里 append 了 'name' 字段，就用它；否则用文件名
+        let customName = req.body.name; 
+        if (customName === 'null' || customName === 'undefined') customName = '';
 
         // 🚨 req.files 是一个数组 (因为我们用了 upload.array)
         const files = req.files as Express.Multer.File[];
@@ -510,12 +635,16 @@ export const uploadFile = async (req: Request, res: Response) => {
         //     parsedData = JSON.parse(content);
         // }
 
+
+        // 🚨【核心修改点】
+        // 1. name: 优先使用 req.body.name (前端传来的干净名字)，没有则用 originalName
+        // 2. path: 使用 path.resolve 获取绝对路径
         // 在数据库中创建文件节点记录
         const fileNode = new FileNode({
             name: mainOriginalName,      // 文件名
             type: 'file',                     // 类型为文件
-            parentId: parentId,                   // 默认放在根目录，后续可以根据需求调整
-            path: mainFilePath,                   // 文件存储路径
+            parentId: parentId,                   // 默认放在根目录，后续可以根据需求调整            
+            path: path.resolve(process.cwd(), mainFilePath),  // 🚨 强制转换为绝对路径 (E:\Course\...)
             size: Number(renamedFilesMap['size']),              // 文件大小
             extension: mainExt,         // 文件扩展名
             mimeType: renamedFilesMap['mime']       // MIME类型
@@ -866,7 +995,11 @@ export const updateFileData = async (req: Request, res: Response) => {
     const { rowIndex, data } = req.body; 
 
     // 1. 数据库校验
-    const fileNode = await FileNode.findById(fileId);
+    // 1. 🚨 使用 const 接收 DB 查询结果，确保类型收窄
+    const dbNode = await FileNode.findById(fileId);
+    if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+
+    let fileNode = dbNode;
     if (!fileNode) {
       return res.status(404).json({ code: 404, message: '文件不存在' });
     }
@@ -876,50 +1009,81 @@ export const updateFileData = async (req: Request, res: Response) => {
     }
 
     const absolutePath = path.resolve(process.cwd(), fileNode.path);
+    const { type, data: fileData } = await readAndParseFile(absolutePath, fileNode.extension);
 
-    // 3. 读取物理文件内容
-    // 🚨【修改点 1】使用 fsPromises.readFile
-    const fileContent = await fsPromises.readFile(absolutePath, 'utf-8');
-    const geoJson = JSON.parse(fileContent);
+    if (type === 'json' && fileData.type === 'FeatureCollection' && Array.isArray(fileData.features)) {
+        if (!fileData.features[rowIndex]) return res.status(400).json({ code: 400, message: '行索引越界' });
+        const targetFeature = fileData.features[rowIndex];
+        targetFeature.properties = { ...targetFeature.properties, ...data };
+        ['cp', '_cp', '_geometry'].forEach(k => delete targetFeature.properties[k]);
 
-    // 4. 核心修改逻辑
-    if (
-      geoJson.type === 'FeatureCollection' && 
-      Array.isArray(geoJson.features) && 
-      geoJson.features[rowIndex]
-    ) {
-        const targetFeature = geoJson.features[rowIndex];
-
-        targetFeature.properties = {
-            ...targetFeature.properties,
-            ...data
-        };
-
-        if (targetFeature.properties._geometry) delete targetFeature.properties._geometry;
-        if (targetFeature.properties.cp) delete targetFeature.properties.cp;
-        if (targetFeature.properties._cp) delete targetFeature.properties._cp;
-
-        // 5. 写回硬盘
-        // 🚨【修改点 2】使用 fsPromises.writeFile
-        await fsPromises.writeFile(absolutePath, JSON.stringify(geoJson, null, 2), 'utf-8');
-
-        fileNode.updatedAt = new Date();
-        await fileNode.save();
-
-        console.log(`✅ [Update] 文件 "${fileNode.name}" 第 ${rowIndex} 行数据已更新`);
+        // 🚨 使用智能保存 (处理 CSV 和 SHP 写回)
+        fileNode = await saveDataSmart(fileNode, fileData);
         
-        return res.status(200).json({ 
-            code: 200, 
-            message: '保存成功',
-            data: { updatedAt: fileNode.updatedAt }
-        });
+        fileNode.markModified('updatedAt'); 
+        await fileNode.save(); // 保存数据库变更 (如果是 SHP，这里会更新路径)
 
-    } else {
-        return res.status(400).json({ 
-            code: 400, 
-            message: 'GeoJSON 结构不匹配或行索引越界，无法更新' 
-        });
+        return res.status(200).json({ code: 200, message: '保存成功', data: { updatedAt: fileNode.updatedAt } });
+    } 
+
+
+    // 情况2: 普通数组 (CSV)
+    if (type === 'json' && Array.isArray(fileData)) {
+        if (rowIndex < 0 || rowIndex >= fileData.length) return res.status(400).json({ code: 400, message: '行索引越界' });
+        fileData[rowIndex] = { ...fileData[rowIndex], ...data };
+        
+        fileNode = await saveDataSmart(fileNode, fileData);
+        fileNode.markModified('updatedAt'); 
+        await fileNode.save();
+        return res.status(200).json({ code: 200, message: '保存成功', data: { updatedAt: fileNode.updatedAt } });
     }
+
+    return res.status(400).json({ code: 400, message: '不支持的文件结构' });
+    
+
+    // // 3. 读取物理文件内容
+    // // 🚨【修改点 1】使用 fsPromises.readFile
+    // const fileContent = await fsPromises.readFile(absolutePath, 'utf-8');
+    // const geoJson = JSON.parse(fileContent);
+
+    // // 4. 核心修改逻辑
+    // if (
+    //   geoJson.type === 'FeatureCollection' && 
+    //   Array.isArray(geoJson.features) && 
+    //   geoJson.features[rowIndex]
+    // ) {
+    //     const targetFeature = geoJson.features[rowIndex];
+
+    //     targetFeature.properties = {
+    //         ...targetFeature.properties,
+    //         ...data
+    //     };
+
+    //     if (targetFeature.properties._geometry) delete targetFeature.properties._geometry;
+    //     if (targetFeature.properties.cp) delete targetFeature.properties.cp;
+    //     if (targetFeature.properties._cp) delete targetFeature.properties._cp;
+
+    //     // 5. 写回硬盘
+    //     // 🚨【修改点 2】使用 fsPromises.writeFile
+    //     await fsPromises.writeFile(absolutePath, JSON.stringify(geoJson, null, 2), 'utf-8');
+
+    //     fileNode.updatedAt = new Date();
+    //     await fileNode.save();
+
+    //     console.log(`✅ [Update] 文件 "${fileNode.name}" 第 ${rowIndex} 行数据已更新`);
+        
+    //     return res.status(200).json({ 
+    //         code: 200, 
+    //         message: '保存成功',
+    //         data: { updatedAt: fileNode.updatedAt }
+    //     });
+
+    // } else {
+    //     return res.status(400).json({ 
+    //         code: 400, 
+    //         message: 'GeoJSON 结构不匹配或行索引越界，无法更新' 
+    //     });
+    // }
 
   } catch (error: any) {
     console.error('❌ 更新文件失败:', error);
@@ -936,7 +1100,11 @@ export const updateFileData = async (req: Request, res: Response) => {
 export const addRow = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
-        const fileNode = await FileNode.findById(id);
+        // 1. 🚨 使用 const 接收 DB 查询结果，确保类型收窄
+        const dbNode = await FileNode.findById(id);
+        if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+        let fileNode = dbNode;
+
         if (!fileNode || !fileNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
 
         const absolutePath = path.resolve(process.cwd(), fileNode.path);
@@ -959,7 +1127,7 @@ export const addRow = async (req: Request, res: Response) => {
             };
             data.features.push(newFeature);
             
-            await saveFile(absolutePath, type, data);
+            fileNode = await saveDataSmart(fileNode, data);
             
             fileNode.markModified('updatedAt');
             await fileNode.save();
@@ -985,7 +1153,11 @@ export const deleteRow = async (req: Request, res: Response) => {
         const { id } = req.params;
         const { rowIndex } = req.body;
 
-        const fileNode = await FileNode.findById(id);
+        // 1. 🚨 使用 const 接收 DB 查询结果，确保类型收窄
+        const dbNode = await FileNode.findById(id);
+        if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+        let fileNode = dbNode;
+
         if (!fileNode || !fileNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
 
         const absolutePath = path.resolve(process.cwd(), fileNode.path);
@@ -995,7 +1167,7 @@ export const deleteRow = async (req: Request, res: Response) => {
         if (type === 'json' && data.type === 'FeatureCollection' && Array.isArray(data.features)) {
             if (rowIndex >= 0 && rowIndex < data.features.length) {
                 data.features.splice(rowIndex, 1);
-                await saveFile(absolutePath, type, data);
+                fileNode = await saveDataSmart(fileNode, data);
                 
                 fileNode.markModified('updatedAt');
                 await fileNode.save();
@@ -1022,7 +1194,11 @@ export const addColumn = async (req: Request, res: Response) => {
         const { fieldName, defaultValue } = req.body;
         if (!fieldName) return res.status(400).json({ code: 400, message: '列名不能为空' });
 
-        const fileNode = await FileNode.findById(id);
+        // 1. 🚨 使用 const 接收 DB 查询结果，确保类型收窄
+        const dbNode = await FileNode.findById(id);
+        if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+        let fileNode = dbNode;
+
         if (!fileNode || !fileNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
 
         const absolutePath = path.resolve(process.cwd(), fileNode.path);
@@ -1036,7 +1212,7 @@ export const addColumn = async (req: Request, res: Response) => {
                     feature.properties[fieldName] = defaultValue || '';
                 }
             });
-            await saveFile(absolutePath, type, data);
+            fileNode = await saveDataSmart(fileNode, data);
             
             fileNode.markModified('updatedAt');
             await fileNode.save();
@@ -1061,7 +1237,11 @@ export const deleteColumn = async (req: Request, res: Response) => {
         const protectedFields = ['id', 'name', 'cp']; 
         if (protectedFields.includes(fieldName)) return res.status(400).json({ code: 400, message: '关键字段禁止删除' });
 
-        const fileNode = await FileNode.findById(id);
+        // 1. 🚨 使用 const 接收 DB 查询结果，确保类型收窄
+        const dbNode = await FileNode.findById(id);
+        if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+        let fileNode = dbNode;
+
         if (!fileNode || !fileNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
 
         const absolutePath = path.resolve(process.cwd(), fileNode.path);
@@ -1074,7 +1254,7 @@ export const deleteColumn = async (req: Request, res: Response) => {
                     delete feature.properties[fieldName];
                 }
             });
-            await saveFile(absolutePath, type, data);
+            fileNode = await saveDataSmart(fileNode, data);
             
             fileNode.markModified('updatedAt');
             await fileNode.save();
