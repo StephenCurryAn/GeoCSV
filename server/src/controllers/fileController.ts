@@ -8,6 +8,7 @@ import path from 'path';
 // 先进行Multer存硬盘这个步骤，然后进行控制器处理数据这个步骤，并返回回复
 import FileNode from '../models/FileNode'; // 导入文件节点模型
 import vm from 'vm'; // 🚨 引入 Node.js 虚拟机模块，用于动态执行代码
+import Papa from 'papaparse';
 
 // ==========================================
 // 1. 全局环境补丁 (模拟浏览器环境)
@@ -30,6 +31,146 @@ function toArrayBuffer(buf: Buffer): ArrayBuffer {
         view[i] = buf[i];
     }
     return ab;
+}
+
+/**
+ * 🚨【升级】CSV 转 GeoJSON 核心逻辑
+ * 支持：1. 经纬度列 (Point) 2. 几何数据列 (Polygon/Line/Point)
+ */
+function parseCsvToGeoJSON(csvString: string) {
+    const result = Papa.parse(csvString, {
+        header: true,
+        skipEmptyLines: true,
+        dynamicTyping: true
+    });
+
+    const data = result.data as any[];
+    if (!data || data.length === 0) return { isGeo: false, data: [] };
+
+    const headers = result.meta.fields || Object.keys(data[0]);
+    
+    // --- 1. 定义关键词 ---
+    // A. 几何列关键词 (处理面、线、复杂点)
+    const geomKeywords = ['geometry', 'geom', 'wkt', 'the_geom', '几何', '几何数据', '几何坐标数据', '几何坐标数据 (geometry)'];
+    // B. 类型列关键词 (辅助判断是 Polygon 还是 LineString)
+    const typeKeywords = ['type', 'geometrytype', '图层类型', '类型', 'shapetype'];
+    // C. 经纬度列关键词 (处理简单点)
+    const latKeywords = ['lat', 'latitude', 'wd', 'y', 'y_coord', '纬度'];
+    const lonKeywords = ['lon', 'lng', 'longitude', 'jd', 'x', 'x_coord', '经度'];
+
+    // --- 2. 寻找匹配的列 ---
+    const geomKey = headers.find(h => geomKeywords.includes(h.toLowerCase()));
+    const typeKey = headers.find(h => typeKeywords.includes(h.toLowerCase()));
+    const latKey = headers.find(h => latKeywords.includes(h.toLowerCase()));
+    const lonKey = headers.find(h => lonKeywords.includes(h.toLowerCase()));
+
+    // --- 3. 策略 A: 优先处理 "几何列" (通常包含更丰富的信息) ---
+    if (geomKey) {
+        console.log(`✅ [CSV Parser] 发现几何列: [${geomKey}]，按复杂几何体处理`);
+        
+        const features = data.map((row, index) => {
+            const rawGeom = row[geomKey];
+            if (!rawGeom) return null;
+
+            let coordinates = null;
+            let geoType = 'Unknown';
+
+            // 尝试解析几何数据 (假定是 JSON 字符串，如 "[[[118...]]]")
+            try {
+                if (typeof rawGeom === 'string') {
+                    // 处理可能的 JSON 格式
+                    if (rawGeom.trim().startsWith('[') || rawGeom.trim().startsWith('{')) {
+                        coordinates = JSON.parse(rawGeom);
+                    } 
+                    // (未来可扩展: 支持 WKT 格式，如 "POLYGON((...))")
+                } else if (Array.isArray(rawGeom)) {
+                    coordinates = rawGeom;
+                }
+            } catch (e) {
+                // 解析失败，跳过
+                return null;
+            }
+
+            if (!coordinates) return null;
+
+            // 确定几何类型
+            // 1. 优先读取 "图层类型" 列
+            if (typeKey && row[typeKey]) {
+                geoType = row[typeKey]; // 例如 "Polygon"
+                // 简单的名称清洗 (有些软件导出可能是 "Esri Polygon" 之类)
+                if (geoType.toLowerCase().includes('polygon')) geoType = 'Polygon';
+                if (geoType.toLowerCase().includes('line')) geoType = 'LineString';
+                if (geoType.toLowerCase().includes('point')) geoType = 'Point';
+            } 
+            // 2. 如果没有类型列，根据坐标数组深度推断
+            else {
+                if (Array.isArray(coordinates)) {
+                    const depth = getArrayDepth(coordinates);
+                    if (depth === 1) geoType = 'Point';
+                    else if (depth === 2) geoType = 'LineString'; // 或 MultiPoint
+                    else if (depth === 3) geoType = 'Polygon';    // 或 MultiLineString
+                    else if (depth === 4) geoType = 'MultiPolygon';
+                }
+            }
+
+            // 移除 geometry 字段本身，避免属性表太冗余
+            const properties = { ...row };
+            delete properties[geomKey]; 
+            // 注入 ID
+            properties.id = properties.id || properties.OSM_ID || `csv_${index}`;
+
+            return {
+                type: 'Feature',
+                geometry: {
+                    type: geoType,
+                    coordinates: coordinates
+                },
+                properties: properties
+            };
+        }).filter(f => f !== null);
+
+        return {
+            isGeo: true,
+            data: { type: 'FeatureCollection', features: features }
+        };
+    }
+
+    // --- 4. 策略 B: 处理 "经纬度列" (简单点数据) ---
+    if (latKey && lonKey) {
+        console.log(`✅ [CSV Parser] 发现经纬度列: [${lonKey}, ${latKey}]，按点数据处理`);
+        
+        const features = data.map((row, index) => {
+            const lat = parseFloat(row[latKey]);
+            const lon = parseFloat(row[lonKey]);
+            if (isNaN(lat) || isNaN(lon)) return null;
+
+            return {
+                type: 'Feature',
+                geometry: {
+                    type: 'Point',
+                    coordinates: [lon, lat]
+                },
+                properties: {
+                    ...row,
+                    id: row.id || `csv_${index}`
+                }
+            };
+        }).filter(f => f !== null);
+
+        return {
+            isGeo: true,
+            data: { type: 'FeatureCollection', features: features }
+        };
+    }
+
+    // --- 5. 策略 C: 普通表格 ---
+    console.log('ℹ️ [CSV Parser] 未识别到空间信息，作为普通表格处理');
+    return { isGeo: false, data: data };
+}
+
+// 辅助函数：计算数组深度 (用于推断几何类型)
+function getArrayDepth(value: any): number {
+    return Array.isArray(value) ? 1 + Math.max(0, ...value.map(getArrayDepth)) : 0;
 }
 
 /**
@@ -155,7 +296,12 @@ const readAndParseFile = async (filePath: string, dbExtension?: string) => {
             throw new Error(`Shapefile 解析失败: ${e.message}`);
         }
     }
-
+    // 🚨 2. CSV 处理逻辑
+    if (ext === '.csv') {
+        const content = await fsPromises.readFile(filePath, 'utf-8');
+        const { isGeo, data } = parseCsvToGeoJSON(content);
+        return { type: 'json', data: data }; // 总是返回 json 容器
+    }
     const content = await fsPromises.readFile(filePath, 'utf-8');
     
     if (ext === '.json' || ext === '.geojson') {

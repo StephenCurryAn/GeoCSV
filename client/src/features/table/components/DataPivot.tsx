@@ -96,7 +96,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
   const generateColumnDefs = (rows: any[]) => {
     if (rows.length === 0) return [];
     // 定义不可编辑的字段 (例如 ID 和 坐标)
-    const readOnlyFields = ['id', '_geometry', 'cp', '_cp'];
+    const readOnlyFields = ['id', '_geometry', 'cp', '_cp', '_lng', '_lat', '_geom_coords'];
     const keys = Object.keys(rows[0]);
     return keys
       .filter(k => !['_cp'].includes(k))
@@ -106,6 +106,9 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
         headerName: (() => {
             if (key === '_geometry') return '图层类型';
             if (key === 'cp') return '中心坐标';
+            if (key === '_lng') return '经度 (Lng)';
+            if (key === '_lat') return '纬度 (Lat)';
+            if (key === '_geom_coords') return '几何坐标数据 (Geometry)';
             return key.toUpperCase();
         })(),
         sortable: true,
@@ -136,7 +139,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
       const rows = geoData.features.map((feature: any) => {
         let cp = feature.properties.cp;
         
-        // 1. 如果没有 cp 或 cp 是字符串，尝试修复
+        // 1. 如果没有 cp 或 cp 是字符串  ，尝试修复
         if (typeof cp === 'string') {
             try { cp = JSON.parse(cp); } catch(e) {}
         }
@@ -147,11 +150,30 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
                 cp = c.geometry.coordinates;
             } catch(e) {}
         }
-        return {
+        // 2. 准备基础属性
+        const row = {
           ...feature.properties,
-          cp: cp, // 存好 cp 供地图使用
+          cp: cp, 
           _geometry: feature.geometry?.type || 'Unknown' 
         };
+
+        // 3. 🚨 注入导出用的几何字段
+        if (feature.geometry) {
+            const gType = feature.geometry.type;
+            const coords = feature.geometry.coordinates;
+
+            if (gType === 'Point' && Array.isArray(coords) && coords.length >= 2) {
+                // 如果是点，拆分成两列，方便 CSV 导出后直接用
+                row['_lng'] = coords[0];
+                row['_lat'] = coords[1];
+            } else {
+                // 如果是面/线，把复杂的坐标数组转成字符串
+                // 这样导出 CSV 时，这一格会包含完整的几何结构数据
+                row['_geom_coords'] = JSON.stringify(coords);
+            }
+        }
+
+        return row;
       });
 
       setRowData(rows);
