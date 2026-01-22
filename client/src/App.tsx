@@ -21,9 +21,14 @@ import LeftPanel from './features/workspace/components/LeftPanel';
 import DataPivot from './features/table/components/DataPivot';
 import MapView from './features/map/components/MapView';
 import { geoService } from './services/geoService';
-import { message, Modal } from 'antd';
+// import { message, Modal } from 'antd';
+import { App as AntdApp } from 'antd'; // 1. 引入 App 组件 (重命名为 AntdApp 避免冲突)
 
 function App() {
+   // 2. 核心修改：使用 useApp Hook 获取带上下文的实例
+  // 这样弹出的 message 和 modal 就会跟随全局主题（变黑），且不会报错
+  const { message, modal } = AntdApp.useApp();
+
   // 🚨【新增】保存当前文件的 ID，用于后续发请求
   const [activeFileId, setActiveFileId] = useState<string>('');
 
@@ -209,7 +214,7 @@ function App() {
     if (!activeFileId) return;
     // 使用 Antd Modal 获取输入
     let value = '';
-    Modal.confirm({
+    modal.confirm({
         title: '新增列',
         content: (
             <input 

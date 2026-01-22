@@ -9,6 +9,8 @@ import path from 'path';
 import FileNode from '../models/FileNode'; // 导入文件节点模型
 import vm from 'vm'; // 🚨 引入 Node.js 虚拟机模块，用于动态执行代码
 import Papa from 'papaparse';
+import iconv from 'iconv-lite';
+import jschardet from 'jschardet';
 
 // ==========================================
 // 1. 全局环境补丁 (模拟浏览器环境)
@@ -20,6 +22,30 @@ if (!g.document) g.document = {}; // 防止访问 document 报错
 
 // 🚨【修改】使用这种方式获取 promises，兼容性最好，防止 undefined 报错
 const fsPromises = fs.promises;
+
+/**
+ * 辅助函数：读取文件并自动检测/转换编码
+ */
+async function readFileContent(filePath: string): Promise<string> {
+    const buffer = await fsPromises.readFile(filePath);
+    
+    // 1. 检测编码
+    const detection = jschardet.detect(buffer);
+    let encoding = detection.encoding || 'utf-8';
+    
+    console.log(`🔍 [Encoding Detect] 检测到文件编码: ${encoding} (置信度: ${detection.confidence})`);
+
+    // 2. 修正常见误判 (GB2312/GBK 家族统一用 GB18030 解码最稳)
+    const upperEnc = encoding.toUpperCase();
+    if (upperEnc === 'GB2312' || upperEnc === 'GBK' || upperEnc === 'GB18030' || upperEnc === 'WINDOWS-1252') {
+        // 有时候 jschardet 会把中文误判为 windows-1252，如果内容看起来是中文 CSV，强制尝试 GBK 往往更准
+        // 这里简单处理：如果是 GB 系列，统一用 gbk
+        encoding = 'gbk';
+    }
+
+    // 3. 解码为字符串
+    return iconv.decode(buffer, encoding);
+}
 
 /**
  * 将 Node.js Buffer 转换为 ArrayBuffer
@@ -418,11 +444,13 @@ const readAndParseFile = async (filePath: string, dbExtension?: string) => {
     }
     // 🚨 2. CSV 处理逻辑
     if (ext === '.csv') {
-        const content = await fsPromises.readFile(filePath, 'utf-8');
+        // const content = await fsPromises.readFile(filePath, 'utf-8');
+        const content = await readFileContent(filePath);
         const { isGeo, data } = parseCsvToGeoJSON(content);
         return { type: 'json', data: data }; // 总是返回 json 容器
     }
-    const content = await fsPromises.readFile(filePath, 'utf-8');
+    // const content = await fsPromises.readFile(filePath, 'utf-8');
+    const content = await readFileContent(filePath);
     
     if (ext === '.json' || ext === '.geojson') {
         try {
@@ -509,7 +537,7 @@ export const uploadFile = async (req: Request, res: Response) => {
         if (parentId === 'null' || parentId === 'undefined' || parentId === '') {
             parentId = null;
         }
-        
+
         // 🚨【新增】支持前端传递自定义名称 (clean name)
         // 如果前端在 FormData 里 append 了 'name' 字段，就用它；否则用文件名
         let customName = req.body.name; 
