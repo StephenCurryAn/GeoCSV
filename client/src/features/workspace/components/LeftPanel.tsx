@@ -6,8 +6,8 @@ import FileTree from './FileTree';
 
 // 定义接口，接收从 App.tsx 传下来的回调
 interface LeftPanelProps {
-  onDataLoaded: (fileName: string, data: any) => void;
-  onSelectFile?: (fileName: string) => void;
+  onDataLoaded: (fileName: string, data: any, fileId: string) => void;
+  onSelectFile?: (fileName: string, fileId?: string) => void;
 }
 
 const LeftPanel: React.FC<LeftPanelProps> = ({ onDataLoaded, onSelectFile }) => {

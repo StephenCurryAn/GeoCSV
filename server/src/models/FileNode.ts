@@ -15,6 +15,7 @@ export interface IFileNode extends Document {
   mimeType?: string;     // ✅ 建议新增: MIME类型 (例如: "text/csv")，方便前端展示图标
   createdAt: Date;
   updatedAt: Date;
+  // _id 是 MongoDB 自动生成的，虽然你没写，但它是数据库的默认主键规则
 }
 
 // 2. 定义 Schema(数据库模式)
@@ -31,7 +32,7 @@ const fileNodeSchema: Schema<IFileNode> = new Schema({
   },
   parentId: {
     type: Schema.Types.ObjectId, // 类型是数据库 ID
-    ref: 'FileNode', // 【关键】引用自己！这叫“自引用”。告诉 Mongoose 这个 ID 指向的是另一个 FileNode
+    ref: 'FileNode', // 引用自己！这叫“自引用”。告诉 Mongoose 这个 ID 指向的是另一个 FileNode
     default: null // 默认为 null，表示放在根目录下
   },
   path: {
@@ -44,13 +45,13 @@ const fileNodeSchema: Schema<IFileNode> = new Schema({
     type: Number,
     required: function(this: IFileNode) { return this.type === 'file'; }
   },
-  // ✅ 新增：后缀名字段
+  // 后缀名字段
   extension: {
     type: String,
     lowercase: true, // 强制存为小写，方便查询 (例如 .CSV -> .csv)
     trim: true // 去除前后空格
   },
-  // ✅ 新增：MIME类型 (可选，但推荐)
+  // MIME类型 (可选，但推荐)
   mimeType: {
     type: String
   }

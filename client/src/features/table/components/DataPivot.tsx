@@ -389,15 +389,12 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
                 }
             }}
 
-            // 🚨【关键修改】监听单元格修改完成事件
+            // 监听单元格修改完成事件，使用唯一id而不是行号，从而确保健壮性
             onCellValueChanged={(event) => {
                 console.log('单元格已修改:', event);
-                if (onDataChange) {
-                    // event.node.rowIndex 是行号
-                    // event.data 是修改后的这一行完整数据
-                    if (event.node.rowIndex !== null && event.node.rowIndex !== undefined) {
-                        onDataChange(event.node.rowIndex, event.data);
-                    }
+                const recordId = event.data.id;
+                if (recordId && onDataChange) {
+                    onDataChange(recordId, event.data);
                 }
             }}
         />

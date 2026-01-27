@@ -168,12 +168,12 @@ class GeoService {
    * @param rowIndex 行索引
    * @param data 修改后的数据 (Properties)
    */
-  async updateFileData(fileId: string, rowIndex: number, data: any): Promise<any> {
+  async updateFileData(fileId: string, recordId: number | string, data: any): Promise<any> {
     try {
         // 发送 POST 请求到后端更新接口
         // 假设后端接口路由为: POST /api/files/:id/update
         const response = await apiClient.post(`/files/${fileId}/update`, {
-            rowIndex,
+            recordId,
             data
         });
         return response.data;

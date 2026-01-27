@@ -42,7 +42,7 @@ function App() {
 
   // 回调函数，后面根据需要再写相关的功能，传给表格，地图组件等之类的
   // 处理数据加载的回调函数
-  const handleDataLoaded = (fileName: string, data: any) => {
+  const handleDataLoaded = (fileName: string, data: any, fileId: string) => {
     console.log(`文件 ${fileName} 加载成功`, data);
     // 存储上传的文件数据
     setUploadedFilesData(prev => ({
@@ -55,6 +55,7 @@ function App() {
 
     // 上传成功后，自动选中该文件
     setActiveFileName(fileName);
+    setActiveFileId(fileId);
   };
 
   // 处理文件选择
@@ -109,14 +110,14 @@ function App() {
    * @param rowIndex 修改的行索引
    * @param newRowData 修改后的这一行数据
    */
-  const handleDataChange = async (rowIndex: number, newRowData: any) => {
+  const handleDataChange = async (recordId: string | number, newRowData: any) => {
     if (!activeFileName) return;
 
-    console.log(`正在更新第 ${rowIndex} 行数据...`, newRowData);
-
+    console.log(`正在更新记录 ${recordId} 数据...`, newRowData);
     // 1. 更新本地 React 状态 (实现 UI 的即时响应，地图属性会同步更新)
     setUploadedFilesData(prev => {
         const currentData = prev[activeFileName];
+        if (!currentData) return prev; // 安全检查
         let updatedData = { ...currentData }; // 浅拷贝
 
         // 判断数据类型并更新
@@ -124,7 +125,15 @@ function App() {
             // GeoJSON: 更新 features 数组里的 properties
             // 注意：DataPivot 里的 newRowData 是扁平化的，我们需要把 properties 覆盖回去
             // 且不能覆盖 geometry
-            const oldFeature = currentData.features[rowIndex];
+            // 假设你的 ID 存在 properties.id 中 (根据之前的 csv 解析逻辑)
+            const targetIndex = currentData.features.findIndex((f: any) => 
+                f.properties?.id === recordId || f.id === recordId
+            );
+            if (targetIndex === -1) {
+                console.warn(`未找到记录 ${recordId}`);
+                return prev; // 未找到记录，不做任何更新
+            }
+            const oldFeature = currentData.features[targetIndex];
             
             // 构造新的 Feature
             const newFeature = {
@@ -141,12 +150,18 @@ function App() {
 
             // 更新数组
             updatedData.features = [...currentData.features];
-            updatedData.features[rowIndex] = newFeature;
+            updatedData.features[targetIndex] = newFeature;
 
         } else if (Array.isArray(currentData)) {
+            const targetIndex = currentData.findIndex((row: any) => row.id === recordId);
+            if (targetIndex === -1) {
+                console.warn(`未找到记录 ${recordId}`);
+                return prev; // 未找到记录，不做任何更新
+            }
+
             // 普通数组: 直接替换
             updatedData = [...currentData];
-            updatedData[rowIndex] = newRowData;
+            updatedData[targetIndex] = { ...updatedData[targetIndex], ...newRowData };
         }
 
         return {
@@ -161,7 +176,7 @@ function App() {
         
         // 🚨 真实调用：调用 Service 层发送请求
         // 注意：这里需要你在 geoService.ts 里实现 updateFileData 方法
-        const response = await geoService.updateFileData(activeFileId, rowIndex, newRowData);
+        const response = await geoService.updateFileData(activeFileId, recordId, newRowData);
         
         if (response.code === 200) {
             message.success({ content: '保存成功', key: 'save' });
