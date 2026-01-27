@@ -61,3 +61,16 @@ app.listen(PORT, () => {
     ---------------------------
     `);
 });
+
+
+// 捕获未处理的 Promise 拒绝 (比如数据库连不上)
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ 未处理的 Promise 拒绝:', reason);
+    // 这里不退出进程，只是记录错误
+});
+
+// 捕获未捕获的异常 (比如代码写错了)
+process.on('uncaughtException', (error) => {
+    console.error('💥 未捕获的异常:', error);
+    // 在生产环境通常建议退出，但在开发环境你可以选择不退出，或者让 nodemon 重启
+});

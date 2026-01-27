@@ -55,6 +55,9 @@ function App() {
 
     // 上传成功后，自动选中该文件
     setActiveFileName(fileName);
+    // 这里面的fileId来源是后端数据库 (MongoDB) 在执行 fileNode.save() 时候
+    // 就在这一刻，MongoDB 自动为这条数据生成了一个唯一的 _id（类似于 65a1b2c... 这种字符串）
+    // 后端在保存成功后，会将这个 _id 包装在响应数据中发回给前端
     setActiveFileId(fileId);
   };
 

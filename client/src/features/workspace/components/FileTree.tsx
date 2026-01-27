@@ -162,25 +162,6 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
             {content}
         </Dropdown>
     );
-
-    // return (
-    //   // 外层容器：Flex 布局，垂直居中
-    //   <div className="flex items-center w-full pr-2 group h-8">
-        
-    //     {/* 左侧：图标区 (固定宽度或由内容撑开，加个 margin-right) */}
-    //     <span className="mr-2 flex items-center justify-center shrink-0 min-w-5">
-    //       {icon}
-    //     </span>
-
-    //     {/* 中间：文件名 (flex-1 占据剩余空间，防止文字过长遮挡图标) */}
-    //     <span className={`flex-1 truncate transition-colors ${isSelected ? 'text-blue-500 font-medium' : 'text-gray-500 group-hover:text-blue-400'}`}>
-    //       {node.title}
-    //     </span>
-
-    //     {/* 右侧：选中对勾 */}
-    //     {isSelected && <CheckOutlined className="text-blue-500 text-sm ml-2" />}
-    //   </div>
-    // );
   };
 
   const handleRenameSave = async (key: string) => {

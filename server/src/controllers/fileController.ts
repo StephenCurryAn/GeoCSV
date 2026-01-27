@@ -83,7 +83,7 @@ function toArrayBuffer(buf: Buffer): ArrayBuffer {
  */
 function ensureIds(data: any): any {
     if (!data) return data;
-    console.log('这里是文化控制器里面的ensureIds函数中的data：',data)
+    console.log('这里是文件控制器里面的ensureIds函数中的data：',data)
     // 情况 1: GeoJSON FeatureCollection
     if (data.type === 'FeatureCollection' && Array.isArray(data.features)) {
         data.features.forEach((f: any, index: number) => {
@@ -469,7 +469,7 @@ const readAndParseFile = async (filePath: string, dbExtension?: string) => {
             let jsonData = JSON.parse(content);
             // 补全 ID
             jsonData = ensureIds(jsonData);
-            return { type: 'json', data: JSON.parse(content) };
+            return { type: 'json', data: jsonData };
         } catch (e) {
             throw new Error('JSON 文件内容格式错误，解析失败');
         }
@@ -985,8 +985,9 @@ const saveDataSmart = async (fileNode: any, geoJsonData: any) => {
 
     // 策略 B: SHP -> 迁移为 JSON
     else if (ext === '.shp') {
-        console.log(`⚠️ 检测到 SHP 编辑，正在转换为 GeoJSON 以便保存...`);
+        console.log(`检测到 SHP 编辑，正在转换为 GeoJSON 以便保存...`);
         
+        // path.dirname()是从一个完整的文件路径中，剥离出它所在的“文件夹路径”（父目录）
         const dir = path.dirname(absolutePath);
         const basename = path.basename(absolutePath, '.shp'); 
         const newFileName = `${basename}.json`;
@@ -1003,13 +1004,14 @@ const saveDataSmart = async (fileNode: any, geoJsonData: any) => {
         }
 
         // 更新节点信息
-        fileNode.path = path.relative(process.cwd(), newPath);
+        // fileNode.path = path.relative(process.cwd(), newPath);
+        fileNode.path = newPath;
         fileNode.extension = '.json';
         fileNode.name = newFileName;
         fileNode.mimeType = 'application/json';
         
         finalPath = newPath; // 更新最终路径
-        console.log(`✅ SHP 已成功迁移为 JSON: ${newFileName}`);
+        console.log(`SHP 已成功迁移为 JSON: ${newFileName}`);
     }
 
     // 策略 C: JSON -> 直接保存
@@ -1017,7 +1019,7 @@ const saveDataSmart = async (fileNode: any, geoJsonData: any) => {
         await fsPromises.writeFile(absolutePath, JSON.stringify(geoJsonData, null, 2), 'utf-8');
     }
 
-    // 🚨【新增】重新计算文件大小并更新到数据库对象
+    // 重新计算文件大小并更新到数据库对象
     try {
         const stats = await fsPromises.stat(finalPath);
         fileNode.size = stats.size; // 更新大小
@@ -1028,95 +1030,15 @@ const saveDataSmart = async (fileNode: any, geoJsonData: any) => {
     return fileNode;
 };
 
-// /**
-//  * 更新文件 控制器
-//  * 控制器作用：更新文件内部数据接口
-//  * 对应前端: geoService.updateFileData
-//  * 逻辑: 根据 rowIndex 修改 GeoJSON 中的 properties 并写回硬盘
-//  * 发生在前端用户操作后，需要将修改后的内容保存到服务器
-//  * 用到了geoJSONToCSV函数
-//  */
-// export const updateFileData = async (req: Request, res: Response) => {
-//   try {
-//     const fileId = req.params.id;
-//     const { recordId, data } = req.body; 
-
-//     // 1. 数据库校验
-//     // 使用 const 接收 DB 查询结果，确保类型收窄
-//     const dbNode = await FileNode.findById(fileId);
-//     // 这是为了避免fileNode是null的情况（TS会强制报错）
-//     if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
-
-//     let fileNode = dbNode;
-//     if (!fileNode || fileNode.type === 'folder' || !fileNode.path) {
-//       return res.status(400).json({ code: 400, message: '目标不是有效的文件' });
-//     }
-
-//     const absolutePath = path.resolve(process.cwd(), fileNode.path);
-//     const { type, data: fileData } = await readAndParseFile(absolutePath, fileNode.extension);
-
-//     if (type === 'json' && fileData.type === 'FeatureCollection' && Array.isArray(fileData.features)) {
-//         const targetIndex = fileData.features.findIndex((f: any) => 
-//             f.properties?.id === recordId || f.id === recordId
-//         );
-//         if (targetIndex === -1) {
-//              return res.status(404).json({ code: 404, message: '未找到指定 ID 的行数据' });
-//         }
-
-//         const targetFeature = fileData.features[targetIndex];
-//         if (!targetFeature) {
-//              return res.status(404).json({ message: '未找到指定 ID 的行数据' });
-//         }
-//         targetFeature.properties = { ...targetFeature.properties, ...data };
-//         ['cp', '_cp', '_geometry', '_lng', '_lat', '_geom_coords'].forEach(k => delete targetFeature.properties[k]);
-
-//         // 🚨 使用智能保存 (处理 CSV 和 SHP 写回)
-//         fileNode = await saveDataSmart(fileNode, fileData);
-        
-//         fileNode.markModified('updatedAt'); 
-//         await fileNode.save(); // 保存数据库变更 (如果是 SHP，这里会更新路径)
-
-//         return res.status(200).json({ code: 200, message: '保存成功', data: { updatedAt: fileNode.updatedAt } });
-//     } 
-
-
-//     // 情况2: 普通数组 (CSV)
-//     if (type === 'json' && Array.isArray(fileData)) {
-//         const targetIndex = fileData.findIndex((row: any) => row.id === recordId);
-
-//         if (targetIndex === -1) {
-//              return res.status(404).json({ code: 404, message: '未找到指定 ID 的行数据' });
-//         }
-        
-//         // 更新数据
-//         fileData[targetIndex] = { ...fileData[targetIndex], ...data };
-        
-//         // 保存
-//         fileNode = await saveDataSmart(fileNode, fileData);
-//         fileNode.markModified('updatedAt'); 
-//         await fileNode.save();
-        
-//         return res.status(200).json({ code: 200, message: '保存成功', data: { updatedAt: fileNode.updatedAt } });
-//     }
-
-//     return res.status(400).json({ code: 400, message: '不支持的文件结构' });
-
-//   } catch (error: any) {
-//     console.error('❌ 更新文件失败:', error);
-//     return res.status(500).json({ 
-//         code: 500, 
-//         message: '服务器内部错误: ' + error.message 
-//     });
-//   }
-// };
 /**
  * 更新文件 控制器
  * 控制器作用：更新文件内部数据接口
  * 对应前端: geoService.updateFileData
- * 逻辑: 根据 recordId 修改 GeoJSON 中的 properties 并写回硬盘
+ * 重要修改: 根据 recordId 来修改 GeoJSON 中的 properties 并写回硬盘，防止行顺序改变导致的一些问题
  */
 export const updateFileData = async (req: Request, res: Response) => {
   try {
+    // req.params.id是例如 http://localhost:3000/api/files/65a1.../update 中的id
     const fileId = req.params.id;
     // 从请求体中获取 recordId 和 data (修改后的行数据)
     const { recordId, data } = req.body; 
@@ -1128,19 +1050,17 @@ export const updateFileData = async (req: Request, res: Response) => {
     if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
 
     let fileNode = dbNode;
-    if (fileNode.type === 'folder') {
-      return res.status(400).json({ code: 400, message: '无法编辑文件夹，请选择具体文件' });
+    if (fileNode.type === 'folder' || !fileNode.path) {
+      return res.status(400).json({ code: 400, message: '无法编辑文件夹，请选择具体文件/文件路径不存在' });
     }
-    if (!fileNode.path){
-        return res.status(400).json({ code: 400, message: '无法编辑文件夹，请选择具体文件' });
-    }
+    // process.cwd()是终端输入命令的那个文件夹路径
     const absolutePath = path.resolve(process.cwd(), fileNode.path);
     // 读取并解析文件
     const { type, data: fileData } = await readAndParseFile(absolutePath, fileNode.extension);
 
     // 2. 情况A: GeoJSON (FeatureCollection)
     if (type === 'json' && fileData.type === 'FeatureCollection' && Array.isArray(fileData.features)) {
-        // 🚨【核心修复】使用 == (弱等于) 进行比较
+        // 使用 == (弱等于) 进行比较
         // 防止前端传的是 string "3207"，而文件里存的是 number 3207，导致找不到
         const targetIndex = fileData.features.findIndex((f: any) => 
             f.properties?.id == recordId || f.id == recordId
@@ -1154,15 +1074,19 @@ export const updateFileData = async (req: Request, res: Response) => {
         const targetFeature = fileData.features[targetIndex];
         
         // 更新属性 (保留原有的 geometry 和其他未修改的属性)
+        // 更新的逻辑：对象展开运算符 (...) 有一个非常重要的特性：“后来居上”（Last One Wins）
+        // 当你在一个新对象里展开多个对象时，如果出现了相同的 key（键名），写在后面的会覆盖写在前面的。
         targetFeature.properties = { ...targetFeature.properties, ...data };
         
-        // 🚨 清理 DataPivot 前端组件临时添加的辅助字段，防止写入文件
+        // 清理 DataPivot 前端组件临时添加的辅助字段，防止写入文件
         ['cp', '_cp', '_geometry', '_lng', '_lat', '_geom_coords'].forEach(k => delete targetFeature.properties[k]);
 
         // 智能保存 (处理 CSV 和 SHP 的写回逻辑)
         fileNode = await saveDataSmart(fileNode, fileData);
         
         // 更新数据库的时间戳
+        // 告诉 MongoosefileNode 这个对象里的 updatedAt（更新时间）字段已经被修改了
+        // 要不然数据库有时候觉得属性没变，它为了省事，根本不会向数据库发送保存请求
         fileNode.markModified('updatedAt'); 
         await fileNode.save(); 
 
@@ -1171,7 +1095,7 @@ export const updateFileData = async (req: Request, res: Response) => {
 
     // 3. 情况B: 普通数组 (纯 JSON 数组 或 CSV 解析后的结果)
     if (type === 'json' && Array.isArray(fileData)) {
-        // 🚨同样使用弱等于
+        // 同样使用弱等于
         const targetIndex = fileData.findIndex((row: any) => row.id == recordId);
 
         if (targetIndex === -1) {
@@ -1184,6 +1108,8 @@ export const updateFileData = async (req: Request, res: Response) => {
         
         // 保存
         fileNode = await saveDataSmart(fileNode, fileData);
+        // 告诉 MongoosefileNode 这个对象里的 updatedAt（更新时间）字段已经被修改了
+        // 要不然数据库有时候觉得属性没变，它为了省事，根本不会向数据库发送保存请求
         fileNode.markModified('updatedAt'); 
         await fileNode.save();
         
@@ -1194,7 +1120,7 @@ export const updateFileData = async (req: Request, res: Response) => {
     return res.status(400).json({ code: 400, message: '不支持的文件结构 (仅支持 GeoJSON 或 Array)' });
 
   } catch (error: any) {
-    console.error('❌ 更新文件失败:', error);
+    console.error('更新文件失败:', error);
     return res.status(500).json({ 
         code: 500, 
         message: '服务器内部错误: ' + error.message 
