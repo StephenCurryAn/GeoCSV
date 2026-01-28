@@ -10,9 +10,9 @@ import vm from 'vm'; // 引入 Node.js 虚拟机模块，用于动态执行代�
 import Papa from 'papaparse';
 import iconv from 'iconv-lite';
 import jschardet from 'jschardet';
-const fsPromises = fs.promises; // 使用这种方式获取 promises，兼容性最好，防止 undefined 报错
 import FileNode from '../models/FileNode'; // 导入文件节点模型
 
+const fsPromises = fs.promises; // 使用这种方式获取 promises，兼容性最好，防止 undefined 报错
 // 全局环境补丁 (模拟浏览器环境)
 const g = global as any;
 if (!g.self) g.self = g;
@@ -198,6 +198,32 @@ function parseCsvToGeoJSON(csvString: string) {
     // 空检查: 如果解析结果为空，直接返回空数据
     if (!data || data.length === 0) return { isGeo: false, data: [] };
     // 尝试从元数据 (meta.fields) 获取列名列表，如果失败则取第一行数据的 key。这是后续查找关键词的基础
+    // Object.keys()是“把这个对象所有的‘键名’（属性名）提取出来，变成一个数组给我。”
+    // Object是JavaScript 语言内置的全局对象
+
+    // 对于data[0]
+    // 我看到的 CSV 原始文本 和代码中处理的 JavaScript 数据对象 是两种不同的形态
+    // 在代码运行 Object.keys(data[0]) 的时候，你的 CSV 已经被“整容”（解析）过了。
+    // 在内存里，变量 data 实际上变成了这样：
+    // const data = [
+    // 数组第 0 个元素 (对应 CSV 的第 2 行)
+    //   {
+    //     "ID": "3209",
+    //     "NAME": "盐城市",
+    //     "中心坐标": "[120.2234,33.5577]",
+    //     "CHILDNUM": "8",
+    //     "图层类型": "Polygon",
+    //     "几何坐标数据 (Geometry)": "[[[119.4763...]]]"
+    //   },
+    //   // 数组第 1 个元素 (对应 CSV 的第 3 行)
+    //   {
+    //     "ID": "3203",
+    //     "NAME": "徐州市",
+    //     "中心坐标": "[117.5208,34.3268]",
+    //     ...
+    //   },
+    //   // ... 更多行
+    // ];
     const headers = result.meta.fields || Object.keys(data[0]);
     
     // --- 1. 定义关键词 ---
@@ -940,6 +966,8 @@ function geoJSONToCSV(geoJSON: any): string {
         const row = { ...feature.properties };
         
         // 移除内部字段 (如 __csv_id)
+        // Object.keys()是“把这个对象所有的‘键名’（属性名）提取出来，变成一个数组给我。”
+        // Object是JavaScript 语言内置的全局对象
         Object.keys(row).forEach(k => {
             if (k.startsWith('__')) delete row[k];
         });
@@ -1134,7 +1162,7 @@ export const updateFileData = async (req: Request, res: Response) => {
 export const addRow = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
-        // 1. 🚨 使用 const 接收 DB 查询结果，确保类型收窄
+        // 使用 const 接收 DB 查询结果，确保类型收窄
         const dbNode = await FileNode.findById(id);
         if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
         let fileNode = dbNode;
@@ -1143,7 +1171,7 @@ export const addRow = async (req: Request, res: Response) => {
 
         const absolutePath = path.resolve(process.cwd(), fileNode.path);
         
-        // 🚨【关键修改】传入 fileNode.extension，告诉解析器这是个 json 文件
+        // 传入 fileNode.extension，告诉解析器这是个 json 文件
         const { type, data } = await readAndParseFile(absolutePath, fileNode.extension);
 
         if (type === 'json' && data.type === 'FeatureCollection') {
@@ -1160,7 +1188,10 @@ export const addRow = async (req: Request, res: Response) => {
                 geometry: null
             };
             data.features.push(newFeature);
-            
+            // 使用saveDataSmart保存，我感觉主要是针对shp数据，如果有新增的行
+            // 这算作是数据修改了，那么会把shp转换成json保存在硬盘，进行修改保存
+            // 所以需要传一下fileNode参数（改变了路径）
+            // data是修改之后的新数据
             fileNode = await saveDataSmart(fileNode, data);
             
             fileNode.markModified('updatedAt');
@@ -1185,9 +1216,9 @@ export const addRow = async (req: Request, res: Response) => {
 export const deleteRow = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
-        const { rowIndex } = req.body;
+        const { recordId } = req.body;
 
-        // 1. 🚨 使用 const 接收 DB 查询结果，确保类型收窄
+        // 1. 使用 const 接收 DB 查询结果，确保类型收窄
         const dbNode = await FileNode.findById(id);
         if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
         let fileNode = dbNode;
@@ -1195,22 +1226,45 @@ export const deleteRow = async (req: Request, res: Response) => {
         if (!fileNode || !fileNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
 
         const absolutePath = path.resolve(process.cwd(), fileNode.path);
-        // 🚨 传入 extension
+        // 传入 extension
         const { type, data } = await readAndParseFile(absolutePath, fileNode.extension);
 
         if (type === 'json' && data.type === 'FeatureCollection' && Array.isArray(data.features)) {
-            if (rowIndex >= 0 && rowIndex < data.features.length) {
-                data.features.splice(rowIndex, 1);
-                fileNode = await saveDataSmart(fileNode, data);
-                
-                fileNode.markModified('updatedAt');
-                await fileNode.save();
-                
-                res.status(200).json({ code: 200, message: '删除行成功' });
-            } else {
-                res.status(400).json({ code: 400, message: '无效的行索引' });
+            const targetIndex = data.features.findIndex((f: any) => 
+                f.properties?.id == recordId || f.id == recordId
+            );
+
+            if (targetIndex === -1) {
+                console.warn(`[Update] 未找到记录。请求ID: ${recordId} (类型: ${typeof recordId})`);
+                return res.status(404).json({ code: 404, message: `未找到指定 ID 的行数据 (ID: ${recordId})` });
             }
-        } else {
+
+            data.features.splice(targetIndex, 1);
+            fileNode = await saveDataSmart(fileNode, data);
+            
+            fileNode.markModified('updatedAt');
+            await fileNode.save();
+            
+            res.status(200).json({ code: 200, message: '删除行成功' });
+
+        } else if (type === 'json' && Array.isArray(data)) {
+            const targetIndex = data.findIndex((row: any) => row.id == recordId);
+            
+            if (targetIndex === -1) {
+                console.warn(`[Delete] 未找到记录 Array。请求ID: ${recordId}`);
+                return res.status(404).json({ code: 404, message: `未找到指定 ID 的行数据 (ID: ${recordId})` });
+            }
+
+            // 删除
+            data.splice(targetIndex, 1);
+            
+            // 保存
+            await saveDataSmart(fileNode, data);
+            fileNode = await saveDataSmart(fileNode, data);
+            await fileNode.save();
+            
+            return res.status(200).json({ code: 200, message: '删除行成功' });
+        }else {
             res.status(400).json({ code: 400, message: '不支持的文件结构' });
         }
     } catch (error: any) {
@@ -1228,7 +1282,7 @@ export const addColumn = async (req: Request, res: Response) => {
         const { fieldName, defaultValue } = req.body;
         if (!fieldName) return res.status(400).json({ code: 400, message: '列名不能为空' });
 
-        // 1. 🚨 使用 const 接收 DB 查询结果，确保类型收窄
+        // 1. 使用 const 接收 DB 查询结果，确保类型收窄
         const dbNode = await FileNode.findById(id);
         if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
         let fileNode = dbNode;
@@ -1236,18 +1290,21 @@ export const addColumn = async (req: Request, res: Response) => {
         if (!fileNode || !fileNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
 
         const absolutePath = path.resolve(process.cwd(), fileNode.path);
-        // 🚨 传入 extension
+        // 传入 extension
         const { type, data } = await readAndParseFile(absolutePath, fileNode.extension);
 
         if (type === 'json' && data.type === 'FeatureCollection' && Array.isArray(data.features)) {
             data.features.forEach((feature: any) => {
                 if (!feature.properties) feature.properties = {};
+
+                // Object.prototype.hasOwnProperty.call(feature.properties, fieldName)
+                // 意思是检查下feature.properties中有没有叫fieldName的一列
+                // 这是 JavaScript 中最安全的“检查属性是否存在”的写法
                 if (!Object.prototype.hasOwnProperty.call(feature.properties, fieldName)) {
                     feature.properties[fieldName] = defaultValue || '';
                 }
             });
             fileNode = await saveDataSmart(fileNode, data);
-            
             fileNode.markModified('updatedAt');
             await fileNode.save();
 
@@ -1271,7 +1328,7 @@ export const deleteColumn = async (req: Request, res: Response) => {
         const protectedFields = ['id', 'name', 'cp']; 
         if (protectedFields.includes(fieldName)) return res.status(400).json({ code: 400, message: '关键字段禁止删除' });
 
-        // 1. 🚨 使用 const 接收 DB 查询结果，确保类型收窄
+        // 1. 使用 const 接收 DB 查询结果，确保类型收窄
         const dbNode = await FileNode.findById(id);
         if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
         let fileNode = dbNode;
@@ -1279,17 +1336,21 @@ export const deleteColumn = async (req: Request, res: Response) => {
         if (!fileNode || !fileNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
 
         const absolutePath = path.resolve(process.cwd(), fileNode.path);
-        // 🚨 传入 extension
+        // 传入 extension
         const { type, data } = await readAndParseFile(absolutePath, fileNode.extension);
 
         if (type === 'json' && data.type === 'FeatureCollection' && Array.isArray(data.features)) {
             data.features.forEach((feature: any) => {
                 if (feature.properties) {
+                    // 在 JavaScript 中，delete 操作符的作用是从对象中彻底移除这个属性
+                    // 是连根拔起，键（Key/字段名）和值（Value）一起删掉
+
+                    // 并且不用判断是否存在fieldName这一列，因为不会报错
+                    // 因为delete 操作符尝试删除一个根本不存在的属性，它不会报错，而是直接返回 true（表示操作结束）
                     delete feature.properties[fieldName];
                 }
             });
             fileNode = await saveDataSmart(fileNode, data);
-            
             fileNode.markModified('updatedAt');
             await fileNode.save();
 

@@ -20,10 +20,10 @@ interface DataPivotProps {
   // 🚨【新增】接收选中的 Feature
   selectedFeature?: any;
   // 🚨【新增】数据变更回调 (通知父组件保存)
-  onDataChange?: (rowIndex: number, newData: any) => void;
+  onDataChange?: (recordId: string | number, newData: any) => void;
   // 🚨【新增】操作回调
   onAddRow?: () => void;
-  onDeleteRow?: (rowIndex: number) => void;
+  onDeleteRow?: (recordId: string | number) => void;
   onAddColumn?: () => void;
   onDeleteColumn?: (fieldName: string) => void;
 }
@@ -35,7 +35,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
   const [rowData, setRowData] = useState<any[]>([]);
   const [columnDefs, setColumnDefs] = useState<ColDef[]>([]);
   // 记录当前选中的行索引，用于删除行
-  const [selectedRowIndex, setSelectedRowIndex] = useState<number | null>(null);
+  const [selectedRecordId, setSelectedRecordId] = useState<string | number | null>(null);
 
   useEffect(() => {
     if (!data) {
@@ -254,9 +254,19 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
             <Popconfirm 
                 title="确定删除选中行吗？" 
                 onConfirm={() => {
-                    if (selectedRowIndex !== null && onDeleteRow) {
-                        onDeleteRow(selectedRowIndex);
-                        setSelectedRowIndex(null); // 删除后重置
+                    // 不再使用 selectedRowIndex，而是直接获取选中行的数据对象
+                    const selectedRows = gridRef.current?.api.getSelectedRows();
+                    if (selectedRows && selectedRows.length > 0 && onDeleteRow) {
+                        const selectedData = selectedRows[0]; // 获取选中行的完整数据
+                        
+                        // 确保有 ID
+                        if (selectedData.id) {
+                            // ✅ 传 ID 给父组件，而不是行号
+                            onDeleteRow(selectedData.id); 
+                            setSelectedRecordId(null); // 重置选中状态
+                        } else {
+                            message.error('该行数据缺失 ID，无法删除');
+                        }
                     } else {
                         message.warning('请先选中一行');
                     }
@@ -267,7 +277,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
                     danger 
                     size="small" 
                     icon={<DeleteOutlined />}
-                    disabled={selectedRowIndex === null}
+                    disabled={selectedRecordId === null}
                 >
                     删行
                 </Button>
@@ -357,12 +367,12 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
             paginationPageSize={20}
             animateRows={true}
 
-            // 🚨 监听行选中，为了获取要删除的行号
-            onRowSelected={(event) => {
-                if (event.node.isSelected() && event.node.rowIndex !== null) {
-                    setSelectedRowIndex(event.node.rowIndex);
-                }
-            }}
+            // // 🚨 监听行选中，为了获取要删除的行号
+            // onRowSelected={(event) => {
+            //     if (event.node.isSelected() && event.node.rowIndex !== null) {
+            //         setSelectedRowIndex(event.node.rowIndex);
+            //     }
+            // }}
 
             // 🚨【关键修改 1】明确配置选择模式和复选框
             // checkboxes: true 确保每行前面都有框 (虽然你可能通过其他方式实现了，但这样写最稳)
@@ -379,6 +389,13 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
                 if (event.source === 'api') return;
 
                 const selectedRows = event.api.getSelectedRows();
+                // 1. 更新本地状态 (控制删行按钮的禁用状态)
+                if (selectedRows.length > 0) {
+                    setSelectedRecordId(selectedRows[0].id); // 存 ID !
+                } else {
+                    setSelectedRecordId(null);
+                }
+                // 2. 通知父组件
                 if (onRowClick) {
                     if (selectedRows.length > 0) {
                         onRowClick(selectedRows[0]);

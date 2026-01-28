@@ -215,11 +215,11 @@ function App() {
   };
 
   // 2. 删除行处理
-  const handleDeleteRow = async (rowIndex: number) => {
+  const handleDeleteRow = async (recordID: string | number) => {
     if (!activeFileId) return;
     try {
         message.loading({ content: '正在删除行...', key: 'row-op' });
-        await geoService.deleteRow(activeFileId, rowIndex);
+        await geoService.deleteRow(activeFileId, recordID);
         message.success({ content: '删除成功', key: 'row-op' });
         refreshFileData(activeFileId, activeFileName);
     } catch (e: any) {

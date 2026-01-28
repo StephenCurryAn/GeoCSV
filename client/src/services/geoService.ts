@@ -195,8 +195,8 @@ class GeoService {
   /**
    * 删除行
    */
-  async deleteRow(fileId: string, rowIndex: number): Promise<any> {
-    const res = await apiClient.post(`/files/${fileId}/row/delete`, { rowIndex });
+  async deleteRow(fileId: string, recordId: number | string): Promise<any> {
+    const res = await apiClient.post(`/files/${fileId}/row/delete`, { recordId });
     return res.data;
   }
 
