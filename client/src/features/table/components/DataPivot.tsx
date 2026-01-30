@@ -1,13 +1,11 @@
+import 'ag-grid-community/styles/ag-grid.css'; 
+import 'ag-grid-community/styles/ag-theme-alpine.css'; 
 import React, { useEffect, useState, useRef } from 'react';
 import { AgGridReact } from 'ag-grid-react'; 
 import { type ColDef, ModuleRegistry, AllCommunityModule } from 'ag-grid-community'; 
-import 'ag-grid-community/styles/ag-grid.css'; 
-import 'ag-grid-community/styles/ag-theme-alpine.css'; 
-// ... 引入 antd 组件
-import { Empty, Button, Space, Popconfirm, message } from 'antd';
+import { Empty, Button, Space, Popconfirm, message } from 'antd'; // ... 引入 antd 组件
 import { PlusOutlined, DeleteOutlined, TableOutlined, MinusSquareOutlined, DownloadOutlined } from '@ant-design/icons';
-// 🚨【新增】引入 center 计算
-import { center } from '@turf/turf';
+import { center } from '@turf/turf'; // 引入 center 计算
 
 // 注册模块
 ModuleRegistry.registerModules([ AllCommunityModule ]);
@@ -15,13 +13,13 @@ ModuleRegistry.registerModules([ AllCommunityModule ]);
 interface DataPivotProps {
   data: any;          
   fileName: string;   
-  // 🚨【新增】接收父组件传来的回调
+  // 接收父组件传来的回调，行点击
   onRowClick?: (record: any) => void;
-  // 🚨【新增】接收选中的 Feature
+  // 接收选中的 Feature
   selectedFeature?: any;
-  // 🚨【新增】数据变更回调 (通知父组件保存)
+  // 数据变更回调 (通知父组件保存)
   onDataChange?: (recordId: string | number, newData: any) => void;
-  // 🚨【新增】操作回调
+  // 行列操作回调
   onAddRow?: () => void;
   onDeleteRow?: (recordId: string | number) => void;
   onAddColumn?: () => void;
@@ -29,7 +27,7 @@ interface DataPivotProps {
 }
 
 const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selectedFeature, onDataChange, onAddRow, onDeleteRow, onAddColumn, onDeleteColumn }) => {
-  // 🚨【新增】Grid 引用，用于调用 API
+  // Grid 引用，用于调用 API
   const gridRef = useRef<AgGridReact>(null);
 
   const [rowData, setRowData] = useState<any[]>([]);

@@ -3,13 +3,11 @@ import apiClient from './apiClient';
 /**
  * 上传响应接口
  * 定义后端文件上传接口返回的数据结构
- * 
  * @interface UploadResponse
  * @property {number} code - 响应状态码
  * @property {string} message - 响应消息
  * @property {any} data - 响应数据，包含转换后的 GeoJSON
  */
-// 上传响应接口，定义后端上传响应的数据结构
 export interface UploadResponse {
   code: number;
   message: string;
@@ -25,61 +23,52 @@ export interface UploadResponse {
 /**
  * 地理数据服务
  * 提供与地理数据处理相关的 API 接口
- * 
- * @author AQ
- * @description 封装与后端地理数据处理服务的通信逻辑
+ * 定义类来进行service封装，封装与后端地理数据处理服务的通信逻辑
+ * 把用户在浏览器里选好的文件，打包好，安全、准确地送到后端，并把回执拿回来
  */
-// 定义类来进行service封装
-// 把用户在浏览器里选好的文件，打包好，安全、准确地送到后端，并把回执拿回来
 class GeoService {
   /**
    * 上传地理数据文件
    * 支持 CSV、GeoJSON 等格式的文件上传，并转换为 GeoJSON 格式
-   * 
-   * @param {File} file - 要上传的文件对象
+   * @param {FileList | File[]} files - 上传地理数据文件，用户选择的文件列表 (支持多文件)
    * @returns {Promise<UploadResponse>} 包含 GeoJSON 数据的响应对象
    * @throws {Error} 当上传失败时抛出错误
-   * 
-   * @example
-   * const fileInput = document.querySelector('input[type="file"]');
-   * const file = fileInput.files[0];
-   * const result = await uploadGeoData(file);
-   * console.log(result.data.geoJson); // 处理后的 GeoJSON 数据
-   * 
-   * 🚨【修改】上传地理数据文件 (支持多文件)
-   * @param {FileList | File[]} files - 用户选择的文件列表
    */
   // : Promise<UploadResponse>是输出承诺，会返回一个UploadResponse类型的数据
-  // file是浏览器原生提供的文件对象(通常通过文件输入框获取)
+  // files是浏览器原生提供的文件对象(通常通过文件输入框获取)
   async uploadGeoData(files: FileList | File[], parentId?: string): Promise<UploadResponse> {
     try {
       const fileArray = Array.from(files); // 转为标准数组
-      // if (fileArray.length === 0) throw new Error('请选择文件');
+      if (fileArray.length === 0) throw new Error('请选择文件');
       // 1. 检查文件类型
       const hasShp = fileArray.some(f => f.name.toLowerCase().endsWith('.shp'));
       // 2. 如果包含了 .shp，则必须进行完整性校验
       if (hasShp) {
           const hasDbf = fileArray.some(f => f.name.toLowerCase().endsWith('.dbf'));
           const hasShx = fileArray.some(f => f.name.toLowerCase().endsWith('.shx'));
-          
-          if (!hasDbf || !hasShx) {
-              throw new Error('上传 Shapefile 时，必须同时选中 .shp, .dbf, .shx 三个文件！');
+          const hasPrj = fileArray.some(f => f.name.toLowerCase().endsWith('.prj'));
+          if (!hasDbf || !hasShx || !hasPrj) {
+              throw new Error('上传 Shapefile 时，必须同时选中 .shp, .dbf, .shx 和 .prj 文件');
           }
       }
 
-
       // 构建表单数据，用于文件上传
+      // new FormData() 是在内存里创建了一个 “虚拟的 HTML 表单”。
+      // 它的核心作用是：专门用来打包“文件流”和“数据”，以便通过代码（Ajax/Axios）发送给后端
+      // 通常我们跟后端交互用的是 JSON 格式（比如 { "name": "张三", "age": 18 }）。 
+      // JSON 处理纯文本非常方便，但它有一个巨大的弱点：它不擅长运送“二进制文件”（比如图片、视频、SHP文件等）。
+      // 如果你想用 JSON 发文件，你得把文件转成一长串乱码（Base64），这会让文件体积暴增，传输极慢。
+      // FormData 就是为了解决这个问题诞生的。
       const formData = new FormData();
 
-      // 🚨 注意：这里循环 append，字段名统一为 'files' (对应后端的 upload.array('files'))
+      // 注意：这里循环 append，字段名统一为 'files' (对应后端的 upload.array('files'))
       // 将文件添加到表单数据中，字段名为 'file'
-      // 第一个'file'与后端 Multer 中间件里的 upload.single('file')一致
+      // 第一个'files'与后端 Multer 中间件里的 upload.array('files')一致
       // formData.append('file', file);
       fileArray.forEach(file => {
           formData.append('files', file);
       });
-
-      // ✅ 新增：如果有 parentId，就塞进表单发给后端
+      // 如果有 parentId，就塞进表单发给后端
       if (parentId) {
         formData.append('parentId', parentId);
       }
@@ -120,9 +109,8 @@ class GeoService {
     }
   }
 
-
   /**
-   * 3. 🚨【新增】获取文件内容 (修复 App.tsx 报错的关键)
+   * 获取文件内容 (修复 App.tsx 报错的关键)
    * 用于点击左侧文件树时，从后端拉取文件内容
    */
   async getFileContent(fileId: string): Promise<any> {
@@ -163,9 +151,9 @@ class GeoService {
   }
 
   /**
-   * 🚨【新增】更新文件数据 (用于表格编辑保存)
+   * 更新文件数据 (用于表格编辑保存)
    * @param fileId 文件ID
-   * @param rowIndex 行索引
+   * @param recordId 行id
    * @param data 修改后的数据 (Properties)
    */
   async updateFileData(fileId: string, recordId: number | string, data: any): Promise<any> {
@@ -220,6 +208,3 @@ class GeoService {
 
 // 导出 GeoService 实例，使其他模块可以直接使用
 export const geoService = new GeoService();
-
-// 导出 uploadGeoData 函数作为便捷方法
-export const uploadGeoData = (files: FileList | File[]) => geoService.uploadGeoData(files);

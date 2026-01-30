@@ -1,12 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Tree, Button, Empty, Input, Dropdown, type MenuProps, App as AntdApp } from 'antd'; // 引入 Empty 组件美化空状态
-import { FolderAddOutlined, CloudUploadOutlined, FileTextOutlined, FileImageOutlined, TableOutlined, FolderFilled, CheckOutlined, DownOutlined, DeleteOutlined, EditOutlined, ExclamationCircleOutlined} from '@ant-design/icons';
+import { FolderAddOutlined, CloudUploadOutlined, FileTextOutlined, GlobalOutlined,
+         FileImageOutlined, TableOutlined, FolderFilled, CheckOutlined,
+         DownOutlined, DeleteOutlined, EditOutlined, ExclamationCircleOutlined} from '@ant-design/icons';
 import { geoService, type UploadResponse } from '../../../services/geoService';
+
+// FileTreeProps接口，实现子组件传导数据到父组件的接口
+export interface FileTreeProps {
+  onDataLoaded: (fileName: string, data: any, fileId: string) => void;
+  onSelectFile?: (fileName: string, fileId: string) => void;
+}
 
 // 定义树节点的数据结构
 // “？”是可选的意思
 // React.ReactNode 是 React 里表示“任何可以渲染的内容”的类型
 export interface TreeNode {
+  // key: response.data._id，key从这来
   key: string;
   title: string;
   type : 'file' | 'folder';
@@ -16,40 +25,30 @@ export interface TreeNode {
   rawFileName?: string; // 保存原始文件名，方便查找对比
 }
 
-
-
-// 实现子组件传导数据到父组件的接口
-export interface FileTreeProps {
-  onDataLoaded: (fileName: string, data: any, fileId: string) => void;
-  onSelectFile?: (fileName: string, fileId: string) => void;
-}
-
 // 创建文件树组件，并将FileTreeProps作为属性类型（制定规则）
-// onDataLoaded是一个回调函数，类型是(FileName: string, data: any) => void (对象解构，可以直接用onDataLoaded变量名)
+// onDataLoaded是一个回调函数，类型是(fileName: string, data: any, fileId: string) => void (对象解构，可以直接用onDataLoaded变量名)
 const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
-  // ✅ 1. 使用 Hook 获取带上下文的实例
+  // 使用 Hook 获取带上下文的实例
   const { message, modal } = AntdApp.useApp();
+
   // 状态管理
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
-  const [treeData, setTreeData] = useState<TreeNode[]>([]);
-
-  // 🆕 新增状态：控制重命名
-  const [editingKey, setEditingKey] = useState<string | null>(null);
-  const [editingValue, setEditingValue] = useState('');
-  const inputRef = useRef<any>(null); // 用于自动聚焦输入框
-  // 🚨【新增】用于触发原生文件选择的 Ref
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // TreeNode[]表示 TreeNode 类型的数组
-
   // 对于这个初始化的树，如果使用...展开为数组，展开后数组里只有 2 个元素：[root节点, sample1节点]
   // 浅拷贝，顶层遍历，children 还是引用类型，依然被包裹在这个对象内部，并没有被拿出来
   // 如果想通过 ... 把树形结构变成一个扁平的一维数组，需要写一个递归函数来实现
+  const [treeData, setTreeData] = useState<TreeNode[]>([]);
 
-  // 组件挂载时获取文件树数据
-  useEffect(() => {
-    fetchFileTree();
-  }, []);
+  // 控制重命名的状态
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [editingValue, setEditingValue] = useState('');
+  // inputRef表示不管组件怎么重新渲染，这个对象在内存里始终是同一个，不会变
+  // 这个对象有一个特殊的属性叫 .current，用来存数据
+  const inputRef = useRef<any>(null); // 用于自动聚焦输入框
+
+  // 用于触发原生文件上传的 Ref
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 从后端获取文件树数据
   const fetchFileTree = async () => {
@@ -67,6 +66,10 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
       message.error(`获取文件树失败: ${error.message}`);
     }
   };
+  // 组件挂载时获取文件树数据
+  useEffect(() => {
+    fetchFileTree();
+  }, []);
 
   // 辅助函数：根据文件名获取图标
   // 图标逻辑：根据文件类型返回不同颜色图标
@@ -80,10 +83,12 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
       case 'xlsx': return <TableOutlined className="text-green-400!" />;
       case 'json': return <FileImageOutlined className="text-gray-400!" />;
       case 'geojson': return <FileImageOutlined className="text-gray-400!" />;
+      case 'shp': return <GlobalOutlined className="text-blue-400!" />;
       default: return <FileTextOutlined className="text-gray-400!" />;
     }
   };
-  // 标题渲染逻辑：实现"右侧对勾"效果
+  // 辅助函数:标题渲染逻辑：实现"右侧对勾"效果
+  // node 参数是由 Ant Design 的 <Tree /> 组件在内部调用时自动传过来的
   const titleRender = (node: any) => {
     const isSelected = selectedKeys.includes(node.key);
     const isEditing = editingKey === node.key; // 判断是否处于编辑模式
@@ -179,11 +184,12 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
         message.error(error.message);
         // 即使失败也要退出编辑模式，或者保持编辑模式让用户修改
         // 这里选择保持编辑模式
+        // 如果这个输入框（inputRef）目前存在于页面上，请把光标自动移进去（聚焦）。
         inputRef.current?.focus();
     }
   };
 
-  // 🆕 新增：处理删除
+  // 处理删除
   const handleDelete = (key: string, title: string) => {
     modal.confirm({
         title: '确认删除',
@@ -208,107 +214,7 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
     });
   };
 
-  /**
-   * 🚨【新增】处理文件选择 (替代 customUploadRequest)
-   */
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
-    // 获取 targetParentId
-    const currentSelectedKey = selectedKeys[0];
-    let targetParentId = undefined;
-    if (currentSelectedKey) {
-        const targetNode = findNodeByKey(treeData, currentSelectedKey);
-        if (targetNode && targetNode.type === 'folder') {
-            targetParentId = currentSelectedKey;
-        }
-    }
-
-    const hideLoading = message.loading('正在上传并解析...', 0);
-
-    try {
-        // 🚨 调用 geoService 里的新方法 (支持 FileList)
-        const response: UploadResponse = await geoService.uploadGeoData(files, targetParentId);
-        
-        hideLoading();
-
-        if (response.code === 200 && response.data) {
-            message.success(`${response.data.fileName} 上传成功！`);
-            
-            // 1. 通知父组件显示数据
-            if (response.data.geoJson) {
-                onDataLoaded(response.data.fileName, response.data.geoJson, response.data._id);
-            }
-
-            // 2. 构造新节点
-            const newFileNode: TreeNode = {
-                key: response.data._id,
-                title: response.data.fileName,
-                type: 'file',
-                rawFileName: response.data.fileName,
-                isLeaf: true
-            };
-
-            // 3. 更新树
-            setTreeData(prev => {
-                if (targetParentId) {
-                    return insertNodeToTree(prev, targetParentId, newFileNode);
-                } else {
-                    return [...prev, newFileNode];
-                }
-            });
-
-            // 4. 选中新文件
-            setSelectedKeys([newFileNode.key]);
-            
-            // 5. 稍微延迟刷新全树
-            setTimeout(fetchFileTree, 500);
-
-        } else {
-            throw new Error(response.message || '上传未返回有效数据');
-        }
-
-    } catch (error: any) {
-        hideLoading();
-        message.error(`上传失败: ${error.message}`);
-        console.error(error);
-    } finally {
-        // 🚨 必须清空 input 的值，否则删除文件后再次上传同名文件不会触发 onChange
-        if (fileInputRef.current) {
-            fileInputRef.current.value = '';
-        }
-    }
-  };
-
-  // 选中逻辑
-  // 这里用info作为参数是因为：
-  // “点击” (Select) 这个动作包含的信息很多，不仅仅是“点了谁”
-  // Ant Design 把它们打包在 info 对象里，是为了扩展性。
-  // info 对象里通常包含：
-  // info.node: 点了谁（主角）；
-  // info.selected: 现在是不是选中状态（布尔值）；
-  // info.event: 一些原生事件对象（用于处理右键菜单、阻止冒泡等）；
-  // 以及其他一些辅助信息，方便你根据具体情况做不同的处理。
-  const handleSelect = (keys: React.Key[], info: any) => {
-    const key = keys[0] as string;
-    if (!key) return;
-    
-    setSelectedKeys([key]); //改变状态，会触发组件重新渲染
-
-    // && onSelectFile，检查父组件 (App) 是否传了这个回调函数给我们
-    // onSelectFile(info.node.rawFileName)，把这个文件的原始文件名 (rawFileName) 扔给父组件
-    if (info.node.type === 'file' && onSelectFile) {
-      // 🚨【修改这里】兼容逻辑：
-      // 1. 刚上传时，有 rawFileName
-      // 2. 从数据库加载时，只有 title (它就是文件名)
-      // 所以：如果 rawFileName 没值，就取 title
-      const fileName = info.node.rawFileName || info.node.title;
-      
-      onSelectFile(fileName, key);
-    }
-  };
-
+  // 辅助函数
   // 根据 Key 查找节点的函数 (用于判断选中的是不是文件夹)
   const findNodeByKey = (nodes: TreeNode[], key: string): TreeNode | null => {
     for (const node of nodes) {
@@ -325,6 +231,7 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
     return null;
   };
 
+  // 辅助函数
   // 递归插入节点 (用于把文件塞进深层文件夹)
   const insertNodeToTree = (nodes: TreeNode[], targetKey: string, newNode: TreeNode): TreeNode[] => {
     // map 会返回一个新数组，每个节点都经过处理
@@ -352,7 +259,100 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
     });
   };
   
-  // 新建文件夹处理函数
+  // 处理文件上传
+  // 参数 e 是一个由 React 触发的‘变更事件’，而且这个事件是从一个 HTML <input> 元素上发出来的
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    // 获取 targetParentId
+    const currentSelectedKey = selectedKeys[0];
+    let targetParentId = undefined;
+    if (currentSelectedKey) {
+        const targetNode = findNodeByKey(treeData, currentSelectedKey);
+        // 选中的是哪个文件夹，上传的文件就在哪个文件夹下
+        if (targetNode && targetNode.type === 'folder') {
+            targetParentId = currentSelectedKey;
+        }
+    }
+
+    const hideLoading = message.loading('正在上传并解析...', 0);
+
+    try {
+        // 调用 geoService 里的新方法 (支持 FileList)
+        const response: UploadResponse = await geoService.uploadGeoData(files, targetParentId);
+        
+        hideLoading();
+
+        if (response.code === 200 && response.data) {
+            message.success(`${response.data.fileName} 上传成功！`);
+            // 1. 通知父组件显示数据
+            if (response.data.geoJson) {
+                onDataLoaded(response.data.fileName, response.data.geoJson, response.data._id);
+            }
+            // 2. 构造新节点
+            const newFileNode: TreeNode = {
+                key: response.data._id,
+                title: response.data.fileName,
+                type: 'file',
+                rawFileName: response.data.fileName,
+                isLeaf: true
+            };
+            // 3. 更新树
+            setTreeData(prev => {
+                if (targetParentId) {
+                    return insertNodeToTree(prev, targetParentId, newFileNode);
+                } else {
+                    return [...prev, newFileNode];
+                }
+            });
+            // 4. 选中新文件
+            setSelectedKeys([newFileNode.key]);       
+            // 5. 稍微延迟刷新全树
+            setTimeout(fetchFileTree, 500);
+        } else {
+            throw new Error(response.message || '上传未返回有效数据');
+        }
+    } catch (error: any) {
+        hideLoading();
+        message.error(`上传失败: ${error.message}`);
+        console.error(error);
+    } finally {
+        // 必须清空 input 的值，否则删除文件后再次上传同名文件不会触发 onChange
+        if (fileInputRef.current) {
+            fileInputRef.current.value = '';
+        }
+    }
+  };
+
+  // 处理选中
+  // 这里用info作为参数是因为：
+  // “点击” (Select) 这个动作包含的信息很多，不仅仅是“点了谁”
+  // Ant Design 把它们打包在 info 对象里，是为了扩展性。
+  // info 对象里通常包含：
+  // info.node: 点了谁（主角）；
+  // info.selected: 现在是不是选中状态（布尔值）；
+  // info.event: 一些原生事件对象（用于处理右键菜单、阻止冒泡等）；
+  // 以及其他一些辅助信息，方便根据具体情况做不同的处理。
+  const handleSelect = (keys: React.Key[], info: any) => {
+    const key = keys[0] as string;
+    if (!key) return;
+    
+    setSelectedKeys([key]); //改变状态，会触发组件重新渲染
+
+    // && onSelectFile，检查父组件 (App) 是否传了这个回调函数给我们
+    // onSelectFile: ((fileName: string, fileId: string) => void)，把这个文件的原始文件名和id扔给父组件
+    if (info.node.type === 'file' && onSelectFile) {
+      // 1. 刚上传时，有 rawFileName
+      // 2. 从数据库加载时，只有 title (它就是文件名)
+      // 所以如果 rawFileName 没值，就取 title
+      const fileName = info.node.rawFileName || info.node.title;
+      
+      onSelectFile(fileName, key);
+    }
+  };
+
+  // 处理新建文件夹函数
   const handleCreateFolder = async () => {
     const folderName = prompt('请输入文件夹名称:');
     if (!folderName) return;
@@ -396,7 +396,7 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
 
         message.success('文件夹创建成功！');
 
-        // ✅ 新增：使用 setTreeData 把新文件夹立即显示出来 (消除警告)
+        // 使用 setTreeData 把新文件夹立即显示出来，消除警告
         setTreeData(prev => {
           // 这里的逻辑和上传文件成功后的逻辑一样
           if (parentId) {
@@ -409,9 +409,7 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
         });
 
         // 创建成功后，重新获取文件树数据以同步后端数据库状态
-        setTimeout(() => {
-          fetchFileTree();
-        }, 500); // 延迟执行，确保后端有时间处理数据
+        setTimeout(() => { fetchFileTree(); }, 500); // 延迟执行，确保后端有时间处理数据
       } else {
         throw new Error(result.message || '创建文件夹失败');
       }
@@ -425,8 +423,7 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
   const handleTreeClick = (e: React.MouseEvent) => {
     // 检查是否点击了树节点之外的空白区域
     // 如果点击的是树的背景而非具体的节点，则取消选中
-    if ((e.target as HTMLElement).closest('.ant-tree') &&
-        !(e.target as HTMLElement).closest('.ant-tree-treenode')) {
+    if (!(e.target as HTMLElement).closest('.ant-tree-treenode')) {
       setSelectedKeys([]); // 清空选中状态
     }
   };
@@ -451,21 +448,7 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
           </Button>
 
           {/* 上传数据 */}
-          {/* <Upload
-            customRequest={customUploadRequest}
-            showUploadList={false}
-            accept=".json,.geojson,.csv"
-          >
-            <Button
-              type="primary"
-              size="small"
-              icon={<CloudUploadOutlined />}
-              className="text-gray-200! bg-blue-600 hover:bg-blue-500 border-none text-xs shadow-md"
-            >
-              上传
-            </Button>
-          </Upload> */}
-          {/* 🚨【核心修改】1. 隐藏的原生 input */}
+          {/* 隐藏的原生 input */}
           <input 
             type="file" 
             ref={fileInputRef}
@@ -474,8 +457,7 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
             accept=".json,.geojson,.csv,.shp,.dbf,.shx,.prj,.cpg"
             onChange={handleFileChange}
           />
-
-          {/* 🚨【核心修改】2. 触发 input 点击的按钮 */}
+          {/* 触发 input 点击的按钮 */}
           <Button
               type="primary"
               size="small"
@@ -566,15 +548,14 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
             defaultExpandAll
             selectedKeys={selectedKeys}
             onSelect={handleSelect}
+            // 对于这一步的treeData中的数据，<Tree /> 组件在渲染时，会遍历 treeData 数组里的每一个元素
+            // treeData在组件内部循环
             treeData={treeData}
             // icon={getIcon}
             titleRender={titleRender}
+            // 是Ant Design 的父级容器带着小三角图标转了 90 度
             // 稍微美化一下展开的小三角
             switcherIcon={({ expanded }) => (
-              // <span className="text-zinc-500">
-              //   {/* {expanded ? '▼' : '▶'} */}
-              //   {expanded ? '⌄' : '>'}
-              // </span>
               <span
                 className="
                   flex items-center justify-center

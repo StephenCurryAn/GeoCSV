@@ -1,9 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 
+// children?的意思是：children 是 React 的保留字，代表**“写在组件标签中间的内容”**
+// React.ReactNode是 React 中最宽泛的类型
+// = ({ children }) => { ... }解构赋值，直接把 props 对象里的 children 拿出来，方便后面直接用
 const MainLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
   // 1. 定义宽度状态 (统一使用 px，比百分比更精确且计算简单)
-  const [sidebarWidth, setSidebarWidth] = useState<number>(260);
-  const [tableWidth, setTableWidth] = useState<number>(500); // 给中间面板一个初始像素宽
+  const [sidebarWidth, setSidebarWidth] = useState<number>(260); // 左侧面板一个初始像素宽
+  const [tableWidth, setTableWidth] = useState<number>(500); // 中间面板一个初始像素宽
 
   // 2. 使用 ref 存储拖拽过程中的临时数据，避免闭包陷阱
   // 最后面的（null）表示初始值，意味着组件刚加载时，没有进行拖拽操作，所以这个“口袋”是空的

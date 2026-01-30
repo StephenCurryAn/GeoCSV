@@ -1,3 +1,6 @@
+// 整个 React 应用的 “入口文件” (Entry Point)
+// 把你的 React 代码挂载（Mount）到真实的网页 HTML 上，并配置好全局环境（比如暗色模式）。
+
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App as AntdApp, ConfigProvider, theme } from 'antd' // 引入 AntdApp 和主题配置

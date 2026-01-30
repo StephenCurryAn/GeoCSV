@@ -3,8 +3,6 @@ import axios from 'axios';
 /**
  * Axios 实例配置
  * 用于与后端 API 进行通信
- * 
- * @author AQ
  * @description 统一的 API 客户端配置，包含基础 URL 和默认请求头设置
  */
 const apiClient = axios.create({
