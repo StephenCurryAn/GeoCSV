@@ -1,5 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 
+const MIN_SIDEBAR_WIDTH = 150; // 侧边栏最小展开宽度
+const MIN_TABLE_WIDTH = 200;   // 中间表格最小展开宽度
+const SNAP_THRESHOLD = 80;     // 拖动小于此像素时，自动折叠隐藏
+
 // children?的意思是：children 是 React 的保留字，代表**“写在组件标签中间的内容”**
 // React.ReactNode是 React 中最宽泛的类型
 // = ({ children }) => { ... }解构赋值，直接把 props 对象里的 children 拿出来，方便后面直接用
@@ -44,15 +48,29 @@ const MainLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
     const { type, startX, startWidth } = dragInfoRef.current;
     const deltaX = e.clientX - startX; // 计算鼠标移动距离
 
+    // 计算原始的目标宽度（不带限制的）
+    const rawWidth = startWidth + deltaX;
+
     if (type === 'sidebar') {
+      // 逻辑：如果宽度小于阈值，直接变成 0；否则，限制在 [MIN, MAX] 之间
       // 限制左侧面板最小 150px，最大 500px
-      const newWidth = Math.max(150, Math.min(500, startWidth + deltaX));
-      setSidebarWidth(newWidth);
+      if (rawWidth < SNAP_THRESHOLD) {
+        setSidebarWidth(0);
+      } else {
+        // Math.max 保证展开时至少是 150，防止出现 10px 这种极窄的情况
+        // 设置最小值MIN_SIDEBAR_WIDTH限制，是为了防止用户一拖到阈值的宽度，就立马收缩，从而导致体验感不好
+        const newWidth = Math.max(MIN_SIDEBAR_WIDTH, Math.min(500, rawWidth));
+        setSidebarWidth(newWidth);
+      }
     } else if (type === 'table') {
       // 限制中间面板最小 200px，最大剩余空间的 80% (简单做个最大限制)
       // 注意：这里是调整 Table 的宽度
-      const newWidth = Math.max(200, Math.min(window.innerWidth - sidebarWidth - 100, startWidth + deltaX));
-      setTableWidth(newWidth);
+      if (rawWidth < SNAP_THRESHOLD) {
+        setTableWidth(0);
+      } else {
+        const newWidth = Math.max(MIN_TABLE_WIDTH, Math.min(window.innerWidth - sidebarWidth - 100, rawWidth));
+        setTableWidth(newWidth);
+      }
     }
   };
 
@@ -85,13 +103,19 @@ const MainLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
       {/* --- 左侧面板 --- */}
       <div
         className="shrink-0 flex flex-col bg-geo-panel border-r border-geo-border"
-        style={{ width: `${sidebarWidth}px`, transition: dragInfoRef.current ? 'none' : 'width 0.1s' }}
+        style={{ width: `${sidebarWidth}px`, 
+          // 当宽度为 0 时，隐藏边框以避免出现一条难看的细线（可选优化）
+          borderRightWidth: sidebarWidth === 0 ? 0 : '1px',
+          transition: dragInfoRef.current ? 'none' : 'width 0.1s ease-out' // 加一点 ease-out 让松手后的潜在动画更顺滑 
+        }}
       >
-        <div className="h-12 flex items-center px-4 border-b border-geo-border">
-          <h2 className="text-sm font-medium text-geo-text-primary">资源管理器</h2>
-        </div>
-        <div className="flex-1 overflow-auto p-2">
-          {childrenArray[0]}
+        <div className={`w-full h-full flex flex-col ${sidebarWidth < MIN_SIDEBAR_WIDTH ? 'opacity-0' : 'opacity-100'} transition-opacity duration-100`}>
+          <div className="h-12 flex items-center px-4 border-b border-geo-border">
+            <h2 className="text-sm font-medium text-geo-text-primary">资源管理器</h2>
+          </div>
+          <div className="flex-1 overflow-auto p-2">
+            {childrenArray[0]}
+          </div>
         </div>
       </div>
 
@@ -100,6 +124,8 @@ const MainLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
       <div
         className="w-1 hover:w-2 -ml-0.5 z-10 cursor-col-resize hover:bg-geo-accent transition-all flex items-center justify-center group"
         onMouseDown={(e) => handleMouseDown('sidebar', e)}
+        // 可选：双击拖拽条快速还原/折叠
+        onDoubleClick={() => setSidebarWidth(prev => prev === 0 ? 260 : 0)}
       >
          <div className="w-0.5 h-full bg-transparent group-hover:bg-geo-accent opacity-50 transition-opacity" />
       </div>
@@ -107,13 +133,19 @@ const MainLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
       {/* --- 中间面板 --- */}
       <div
         className="shrink-0 flex flex-col bg-geo-dark"
-        style={{ width: `${tableWidth}px` }}
+        style={{ 
+          width: `${tableWidth}px`,
+          transition: dragInfoRef.current ? 'none' : 'width 0.1s ease-out'
+        }}
       >
-        <div className="h-12 flex items-center px-4 border-b border-geo-border">
-          <h2 className="text-sm font-medium text-geo-text-primary">数据透视</h2>
-        </div>
-        <div className="flex-1 overflow-hidden p-2">
-          {childrenArray[1]}
+        {/* 同样增加内容隐藏逻辑 */}
+         <div className={`w-full h-full flex flex-col ${tableWidth < MIN_TABLE_WIDTH ? 'opacity-0' : 'opacity-100'} transition-opacity duration-100`}>
+            <div className="h-12 flex items-center px-4 border-b border-geo-border">
+              <h2 className="text-sm font-medium text-geo-text-primary">数据透视</h2>
+            </div>
+            <div className="flex-1 overflow-hidden p-2">
+              {childrenArray[1]}
+            </div>
         </div>
       </div>
 
@@ -121,6 +153,7 @@ const MainLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
       <div
         className="w-1 hover:w-2 -ml-0.5 z-10 cursor-col-resize hover:bg-geo-accent transition-all flex items-center justify-center group"
         onMouseDown={(e) => handleMouseDown('table', e)}
+        onDoubleClick={() => setTableWidth(prev => prev === 0 ? 500 : 0)}
       >
          <div className="w-0.5 h-full bg-transparent group-hover:bg-geo-accent opacity-50 transition-opacity" />
       </div>
