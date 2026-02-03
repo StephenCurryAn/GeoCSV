@@ -357,6 +357,10 @@ function App() {
           fileName={activeFileName}
           // 传入选中的要素，用于高亮和弹窗
           selectedFeature={selectedFeature}
+          // React 中最核心的父子组件通信模式，具体来说是子组件向父组件传递数据
+          // “父组件给子组件一个‘对讲机’（函数），当子组件里发生点击事件时，
+          // 子组件通过这个对讲机把‘被点击的数据’（feature）传回给父组件，
+          // 父组件再把它存起来(使用setSelectedFeature存在selectedFeature中)”
           onFeatureClick={(feature) => setSelectedFeature(feature)}
       />
     </MainLayout>

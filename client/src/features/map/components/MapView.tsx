@@ -15,7 +15,6 @@ interface MapViewProps {
 }
 
 // --- 配置常量 ---
-
 // 1. 预设颜色方案 (Color Schemes)
 const COLOR_SCHEMES = {
     default: { name: '默认青色', colors: ['#00e5ff', '#00e5ff'] },
@@ -24,6 +23,7 @@ const COLOR_SCHEMES = {
     plasma: { name: '等离子 (Plasma)', colors: ['#0d0887', '#6a00a8', '#b12a90', '#e16462', '#fca636', '#f0f921'] },
     blues: { name: '海洋蓝 (Blues)', colors: ['#f7fbff', '#deebf7', '#c6dbef', '#9ecae1', '#6baed6', '#4292c6', '#2171b5', '#084594'] },
     reds: { name: '火焰红 (Reds)', colors: ['#fff5f0', '#fee0d2', '#fcbba1', '#fc9272', '#fb6a4a', '#ef3b2c', '#cb181d', '#99000d'] },
+    // reds: { name: '火焰红 (Reds)', colors: ['#fff5f0', '#99000d'] },
 };
 
 // 2. 预设底图样式 (Basemaps)
@@ -62,18 +62,20 @@ const BASEMAPS = [
     },
     {
         key: 'satellite',
-        name: '卫星图 (Satellite)',
+        name: '卫星图 (天地图)',
         style: {
             version: 8,
             sources: {
-                'google-sat': {
+                'tianditu-sat': {
                     type: 'raster',
-                    tiles: ['https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}'], // Google Satellite
+                    tiles: [
+                        'http://t0.tianditu.gov.cn/img_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=img&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=2f10b6f61571dbb1f5c8199c813fea4d'
+                    ], 
                     tileSize: 256,
-                    attribution: '&copy; Google'
+                    attribution: '&copy; 天地图'
                 }
             },
-            layers: [{ id: 'google-sat-layer', type: 'raster', source: 'google-sat' }]
+            layers: [{ id: 'tianditu-sat-layer', type: 'raster', source: 'tianditu-sat' }]
         }
     }
 ];
@@ -82,18 +84,21 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
     const mapContainer = useRef<HTMLDivElement>(null);
     const mapInstance = useRef<maplibregl.Map | null>(null);
     const popupRef = useRef<maplibregl.Popup | null>(null);
-    const [isMapLoaded, setIsMapLoaded] = useState(false);
+    // 缓存上一次的文件名，防止重复 fitBounds
+    const lastFileNameRef = useRef<string>('');
 
-    // --- 新增 State ---
+    const [isMapLoaded, setIsMapLoaded] = useState(false);
     const [numericFields, setNumericFields] = useState<string[]>([]); // 可用于映射的数值字段
     const [activeField, setActiveField] = useState<string | null>(null); // 当前选中的映射字段
     const [activeScheme, setActiveScheme] = useState<string>('default'); // 当前颜色方案
     const [activeBasemap, setActiveBasemap] = useState<string>('dark'); // 当前底图
-
-    // 1. 初始化地图
+    
+    // 初始化地图
     useEffect(() => {
         if (mapInstance.current) return;
 
+        // mapContainer.current的初始值是<div ref={mapContainer} className="w-full h-full" />给的
+        // （初始值是这个div）
         if (mapContainer.current) {
             // 默认使用第一个底图配置
             const defaultStyle = BASEMAPS.find(b => b.key === 'dark')?.style || BASEMAPS[0].style;
@@ -108,10 +113,13 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
             mapInstance.current.on('load', () => {
                 console.log('✅ 地图加载完成');
                 setIsMapLoaded(true);
+                // 确保地图撑满屏幕，防止显示bug
                 mapInstance.current?.resize();
             });
         }
-
+        // 清理函数
+        // 当这个地图组件被销毁（例如用户切到别的页面，或者组件被隐藏）时，
+        // 彻底清除地图占用的资源，防止内存泄漏
         return () => {
             setIsMapLoaded(false);
             if (mapInstance.current) {
@@ -121,10 +129,11 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
         };
     }, []);
 
-    // 2. 数据处理：提取数值字段 (当 data 变化时)
+    // 数据处理：提取数值字段 (当 data 变化时)
     useEffect(() => {
         if (data && data.features && data.features.length > 0) {
             const firstProps = data.features[0].properties;
+            // Object.keys（）处理被解析过的 JavaScript 对象
             const fields = Object.keys(firstProps).filter(key => {
                 const val = firstProps[key];
                 return typeof val === 'number'; // 只筛选数值类型的字段
@@ -137,53 +146,16 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
         }
     }, [data]);
 
-    // 3. 监听数据变化，渲染图层
-    useEffect(() => {
-        if (isMapLoaded && data) {
-            // 渲染几何图形
-            renderGeoJSON(data);
-            // 渲染后立即应用一次颜色（如果已有选中的字段）
-            updateChoroplethColors();
-        }
-    }, [data, isMapLoaded]);
-
-    // 4. 监听可视化配置变化（字段、配色），只更新 Paint Property，不重绘 Geometry
-    useEffect(() => {
-        if (isMapLoaded && data) {
-            updateChoroplethColors();
-        }
-    }, [activeField, activeScheme, isMapLoaded]);
-
-    // 5. 监听底图切换
-    const handleBasemapChange = (basemapKey: string) => {
-        const map = mapInstance.current;
-        if (!map) return;
-
-        const targetStyle = BASEMAPS.find(b => b.key === basemapKey)?.style;
-        if (targetStyle) {
-            setActiveBasemap(basemapKey);
-            // 🚨 关键：setStyle 会清除所有图层。必须在 style 加载后重新添加数据图层
-            map.setStyle(targetStyle as any);
-            
-            map.once('styledata', () => {
-                if (data) {
-                    console.log('🗺️ 底图切换，重新渲染数据层...');
-                    renderGeoJSON(data);
-                    updateChoroplethColors(); // 重新应用颜色
-                }
-            });
-        }
-    };
-
-    // 添加一个 ref
-    const lastFileNameRef = useRef<string>('');
     /**
      * 核心渲染逻辑：只负责 Geometry 和基础图层架构
      */
     const renderGeoJSON = (geoJSON: any) => {
         const map = mapInstance.current;
         if (!map) return;
-        if (!map.style || !map.isStyleLoaded()) return; // 简化的卫兵
+        // map.isStyleLoaded是MapLibre GL JS（以及 Mapbox GL JS）地图实例自带的一个原生方法（API）
+        // 表示地图样式是否完全加载好
+        // if (!map.style || !map.isStyleLoaded()) return; // 简化的卫兵
+        if (!map.getStyle()) return;
 
         const sourceId = 'uploaded-geo-data';
 
@@ -229,6 +201,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
                 'fill-color': '#ffffff',
                 'fill-opacity': 0.2
             },
+            // 默认在最开始只显示id为nothing-selected（不会有）的图层，等后续点击之后再显示点击的图层
             filter: ['==', 'id', 'nothing-selected']
         });
         map.addLayer({
@@ -242,19 +215,21 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
             filter: ['==', 'id', 'nothing-selected']
         });
 
-        // Fit Bounds (如果是刚加载数据，才飞；如果是切底图，不飞)
-        // 这里简单处理：每次 render 都飞一下，或者你可以加个 flag 控制
-        // 🚨 改进：只有当文件名变化时，才重新调整视野
+        // 只有当文件名变化时，才重新调整视野
         if (fileName !== lastFileNameRef.current) {
             try {
+                // bbox计算该 GeoJSON 数据的“最小外接矩形”
                 const bounds = bbox(geoJSON) as [number, number, number, number];
                 map.fitBounds(bounds, { padding: 50, maxZoom: 14, duration: 1500 });
                 lastFileNameRef.current = fileName; // 更新记录
             } catch(e) { console.warn('BBox calc failed', e) }
         }
 
-        // 绑定事件 (同原代码，略微精简)
+        // 绑定事件
         if (map.getLayer('geo-fill-layer')) {
+            // 当用户在地图上点击，
+            // 且点击的位置正好位于 ID 为 'geo-fill-layer' 的图层形状（Feature）上时，
+            // 执行后面的函数
             map.on('click', 'geo-fill-layer', (e) => {
                 if (e.features && e.features.length > 0) {
                     const feature = e.features[0];
@@ -278,7 +253,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
     };
 
     /**
-     * 🎨 核心：更新颜色映射 (Choropleth)
+     * 更新颜色映射 (Choropleth)
      */
     const updateChoroplethColors = () => {
         const map = mapInstance.current;
@@ -309,10 +284,15 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
         if (min === Infinity || max === -Infinity) return; // 没数据
 
         // 4. 构建插值表达式 (Linear Interpolation)
-        // format: ['interpolate', ['linear'], ['get', field], stop1, color1, stop2, color2, ...]
         const step = (max - min) / (colors.length - 1);
+        
+        // Mapbox 样式规范中标准的表达式语法。它是一个数组，会被直接传给 GPU
+        // 'interpolate'指令。告诉地图引擎：“我要做一个渐变效果，不是突变的
+        // ['linear']线性插值
+        // ['get', activeField]，这是输入变量，读取当前这个多边形（Feature）里名为 activeField（比如 'GDP'）的属性值
         const expression: any[] = ['interpolate', ['linear'], ['get', activeField]];
         
+        // 注意，因为这里设置了['linear']线性插值，所以如果是计算数值区间之间的值，会显示混合渐变色
         colors.forEach((color: string, index: number) => {
             expression.push(min + step * index);
             expression.push(color);
@@ -324,6 +304,84 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
         console.log(`🎨 颜色映射更新: Field=${activeField}, Range=[${min}, ${max}]`);
     };
 
+    // 监听数据变化，渲染图层
+    useEffect(() => {
+        if (isMapLoaded && data) {
+            // 渲染几何图形
+            renderGeoJSON(data);
+            // 渲染后立即应用一次颜色（如果已有选中的字段）
+            updateChoroplethColors();
+            console.log('数据渲染完成')
+        }
+    }, [data, isMapLoaded]);
+
+    // 监听可视化配置变化（字段、配色），只更新 Paint Property，不重绘 Geometry
+    useEffect(() => {
+        if (isMapLoaded && data) {
+            updateChoroplethColors();
+        }
+    }, [activeField, activeScheme, isMapLoaded]);
+    
+    // 用来记录上一次的底图，初始化为当前的 activeBasemap
+    const prevBasemapRef = useRef(activeBasemap);
+    // 监听样式数据加载，确保图层在切换底图后不丢失
+    useEffect(() => {
+        const map = mapInstance.current;
+        if (!map) return;
+
+        const onStyleData = () => {
+            if (activeBasemap !== prevBasemapRef.current) {
+                console.log(`底图改变触发: ${prevBasemapRef.current} -> ${activeBasemap}`);
+                // 立即更新 Ref，防止后续的 styledata 事件重复打印
+                prevBasemapRef.current = activeBasemap;
+            }
+
+            // 只有当地图样式完全加载，且我们需要的数据存在时才执行
+            if (map.getStyle() && data) {
+                // console.log('地图样式完全加载，重新渲染');
+                
+                // 核心判断：如果数据源不见了（说明刚切换了底图），则重新渲染
+                if (!map.getSource('uploaded-geo-data')) {
+                    console.log('检测到底图切换，正在恢复 GeoJSON 图层...');
+                    
+                    // 加上 try-catch 防止极少数情况下的竞态错误
+                    try {
+                        renderGeoJSON(data);
+                        // 稍微延迟一点点应用颜色，确保图层已经注册到 map 中
+                        setTimeout(() => {
+                            updateChoroplethColors();
+                        }, 10);
+                    } catch (err) {
+                        console.warn('恢复图层失败，等待下一次事件:', err);
+                    }
+                }
+            }
+        };
+
+        map.on('styledata', onStyleData);
+
+        return () => {
+            map.off('styledata', onStyleData);
+        };
+    // 这里加入 activeBasemap 依赖，是为了确保 renderGeoJSON 内部取到的边框颜色是基于新底图的
+    }, [data, activeBasemap, activeField, activeScheme]);
+
+    // handleBasemapChange只需要负责两件事：更新 React 状态、告诉地图切换样式
+    // basemapKey 是从 UI 界面上的下拉菜单（Select 组件）传过来的
+    const handleBasemapChange = (basemapKey: string) => {
+        const map = mapInstance.current;
+        if (!map) return;
+
+        const targetStyle = BASEMAPS.find(b => b.key === basemapKey)?.style;
+        if (targetStyle) {
+            // 更新 React 状态 (用于 UI 显示)
+            setActiveBasemap(basemapKey);
+            
+            // 切换地图样式 (这会触发 styledata 事件，进而触发上面的 useEffect)
+            map.setStyle(targetStyle as any);
+        }
+    };
+    
     // 监听 selectedFeature 高亮 (保持原有逻辑)
     useEffect(() => {
         const map = mapInstance.current;
@@ -337,10 +395,11 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
         const uniqueKey = selectedFeature.id ? 'id' : 'name';
         const uniqueVal = selectedFeature.id || selectedFeature.name;
         if (uniqueVal) {
-            // 🚨 改进：防止 ID 类型不匹配 (String vs Number)
+            // 防止 ID 类型不匹配 (String vs Number)
             // 如果是 ID，我们让它同时匹配 字符串形式 和 数字形式
             if (uniqueKey === 'id') {
                 map.setFilter('geo-highlight-fill', [
+                    // 'any' 相当于 JavaScript 中的 ||（逻辑或）
                     'any', 
                     ['==', ['to-string', ['get', 'id']], String(uniqueVal)], // 把地图里的ID转字符串对比
                     ['==', ['get', 'id'], uniqueVal] // 或者直接对比
@@ -356,8 +415,8 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
                 map.setFilter('geo-highlight-line', ['==', uniqueKey, uniqueVal]);
             }
         }
-        // Popup 逻辑保持原样...
-        // 🚨 这里的 cp 现在肯定是数组了，因为我们在 click 事件里修复了它
+        // Popup 逻辑
+        // 这里的 cp 现在肯定是数组了，因为我们在 click 事件里修复了它
         let centerCoord: [number, number] | null = null;
         // 使用数据自带的 cp (center point) 字段
         if (selectedFeature.cp && Array.isArray(selectedFeature.cp)) {
@@ -374,7 +433,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
             // 生成弹窗内容 HTML (过滤掉不想显示的内部字段)
             const ignoreKeys = ['_geometry', '_geometry_type'];
             const rowsHtml = Object.entries(selectedFeature)
-                // 🚨 过滤掉 id (因为我们在标题栏或置顶显示它)，过滤掉 geometry 相关
+                // 过滤掉 id (因为我们在标题栏或置顶显示它)，过滤掉 geometry 相关
                 .filter(([key]) => key !== 'id' && !ignoreKeys.includes(key) && typeof key === 'string')
                 .map(([key, val]) => `
                     <div class="flex justify-between py-1 border-b border-gray-700 last:border-0">
@@ -410,7 +469,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
             .addTo(map);
 
             // 飞到该位置
-            map.flyTo({ center: centerCoord, zoom: 8, speed: 1.5 });
+            map.flyTo({ center: centerCoord, zoom: 12, speed: 1.5 });
         }
     }, [selectedFeature, isMapLoaded]);
 
@@ -444,7 +503,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
                             </span>
                         </div>
 
-                        {/* 🚨 修复点：Antd v6 使用 orientation 替代 direction */}
+                        {/* Antd v6 使用 orientation 替代 direction */}
                         <Space orientation="vertical" className="w-full" size="middle">
                             
                             {/* 1. 字段选择 */}
@@ -474,6 +533,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
                                         value={activeScheme}
                                         onChange={setActiveScheme}
                                     >
+                                        {/* Object.entries 把它转换成数组，方便遍历 */}
                                         {Object.entries(COLOR_SCHEMES).map(([key, scheme]) => (
                                             <Option key={key} value={key}>
                                                 <div className="flex items-center justify-between">
@@ -482,6 +542,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
                                                     <div className="flex h-3 w-12 ml-2 rounded overflow-hidden border border-white/20">
                                                         {scheme.colors.map((c, index) => (
                                                             // 使用 index 作为 key，确保唯一性
+                                                            // flex: 1：这一句最关键。 它的意思是“平分空间
                                                             <div key={index} style={{ backgroundColor: c, flex: 1 }} />
                                                         ))}
                                                     </div>

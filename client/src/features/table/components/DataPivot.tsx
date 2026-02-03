@@ -8,6 +8,7 @@ import { PlusOutlined, DeleteOutlined, TableOutlined, MinusSquareOutlined, Downl
 import { center } from '@turf/turf'; // 引入 center 计算
 
 // 注册模块
+// 向 AG Grid 的全局系统注册‘社区版’的所有功能模块，以便表格能正常运行
 ModuleRegistry.registerModules([ AllCommunityModule ]);
 
 interface DataPivotProps {
@@ -29,8 +30,9 @@ interface DataPivotProps {
 const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selectedFeature, onDataChange, onAddRow, onDeleteRow, onAddColumn, onDeleteColumn }) => {
   // Grid 引用，用于调用 API
   const gridRef = useRef<AgGridReact>(null);
-
+  // 表格的行数据   
   const [rowData, setRowData] = useState<any[]>([]);
+  // 表格列的配置蓝图
   const [columnDefs, setColumnDefs] = useState<ColDef[]>([]);
   // 记录当前选中的行索引，用于删除行
   const [selectedRecordId, setSelectedRecordId] = useState<string | number | null>(null);
@@ -43,7 +45,6 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
     }
 
     const ext = fileName.split('.').pop()?.toLowerCase();
-    
     if (
         ext === 'json' || 
         ext === 'geojson' || 
@@ -60,23 +61,23 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
 
   }, [data, fileName]);
 
-  // 🚨【核心修复】监听 selectedFeature，同步高亮表格行
+  // 监听 selectedFeature，同步高亮表格行
   useEffect(() => {
-    // 1. 先把 API 赋值给局部变量，解决 "gridRef.current is possibly null" 报错
+    // 先把 API 赋值给局部变量，解决 "gridRef.current is possibly null" 报错
     // 使用可选链 ?. 确保安全访问
+    // api 的值是 AG Grid 库在组件初始化完成后，自动挂载到你的 Ref 对象上的
+    // api对象里包含了数百个函数，全是用来控制表格的，“万能操作面板”
     const api = gridRef.current?.api;
-
-    // 2. 如果 api 不存在，直接结束
+    // 如果 api 不存在，直接结束
     if (!api) return;
 
     if (selectedFeature) {
-        // 3. 使用局部变量 api 进行操作，TS 就不会报错了
+        // 使用局部变量 api 进行操作，TS 就不会报错了
         api.forEachNode((node) => {
             const nodeData = node.data;
             // 匹配逻辑：优先比对 ID，没有 ID 比对 Name
             const isMatch = (nodeData.id && nodeData.id === selectedFeature.id) || 
                             (nodeData.name && nodeData.name === selectedFeature.name);
-            
             if (isMatch) {
                 node.setSelected(true);
                 api.ensureNodeVisible(node, 'middle'); // 滚动到该行
@@ -100,7 +101,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
       .filter(k => !['_cp'].includes(k))
       .map(key => ({
         field: key,
-        // 🚨【修改点 2】自定义表头名称 (让显示更友好)
+        // 自定义表头名称 (让显示更友好)
         headerName: (() => {
             if (key === '_geometry') return '图层类型';
             if (key === 'cp') return '中心坐标';
@@ -114,14 +115,12 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
         resizable: true,
         flex: 1,
 
-        // 🚨【关键】开启编辑！
         // 只有不在 readOnlyFields 里的字段可以编辑
         editable: !readOnlyFields.includes(key),
         // 编辑器配置 (默认是文本框，也可以配下拉框等)
         cellEditor: 'agTextCellEditor',
 
-        // 🚨【修复 2】解决 Warning #48
-        // 如果值是对象或数组（比如 "cp": [120, 30]），转成字符串显示
+        // 如果值是对象或数组（比如 "cp": [120, 30]），转成字符串显示，解决 Warning #48
         valueFormatter: (params: any) => {
           const val = params.value;
           if (typeof val === 'object' && val !== null) {
@@ -137,25 +136,26 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
       const rows = geoData.features.map((feature: any) => {
         let cp = feature.properties.cp;
         
-        // 1. 如果没有 cp 或 cp 是字符串  ，尝试修复
+        // 如果没有 cp 或 cp 是字符串 ，尝试修复
+        // JSON.parse 是把 JSON 格式的字符串 转换成 JavaScript 对象或数组
         if (typeof cp === 'string') {
             try { cp = JSON.parse(cp); } catch(e) {}
         }
-        // 2. 依然没有，则计算
+        // 依然没有，则计算
         if ((!cp || !Array.isArray(cp)) && feature.geometry) {
             try {
                 const c = center(feature);
                 cp = c.geometry.coordinates;
             } catch(e) {}
         }
-        // 2. 准备基础属性
+        // 准备基础属性
         const row = {
           ...feature.properties,
           cp: cp, 
           _geometry: feature.geometry?.type || 'Unknown' 
         };
 
-        // 3. 🚨 注入导出用的几何字段
+        // 注入导出用的几何字段
         if (feature.geometry) {
             const gType = feature.geometry.type;
             const coords = feature.geometry.coordinates;
@@ -170,7 +170,6 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
                 row['_geom_coords'] = JSON.stringify(coords);
             }
         }
-
         return row;
       });
 
@@ -188,7 +187,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
       setColumnDefs(generateColumnDefs(arr));
   }
 
-  // 🚨【修改 2】新增：导出 CSV 处理函数
+  // 导出 CSV 处理函数
   const handleExportCSV = () => {
     if (gridRef.current && gridRef.current.api) {
         // 使用 AG Grid 原生导出功能
@@ -219,7 +218,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
         <span>记录数: {rowData.length}</span>
       </div> */}
 
-      {/* 🚨【新增】工具栏 */}
+      {/* 工具栏 */}
       <div className="bg-[#1f2937] p-2 border-b border-gray-700 flex justify-between items-center">
         <div className="text-xs text-blue-400 font-mono">
           <span>{fileName}</span>
@@ -228,7 +227,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
         
         {/* 操作按钮组 */}
         <Space size="small">
-            {/* 🚨【修改 3】在“增行”左边添加“导出CSV”按钮 */}
+            {/* 在“增行”左边添加“导出CSV”按钮 */}
             <Button 
                 size="small" 
                 icon={<DownloadOutlined />} 
@@ -259,7 +258,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
                         
                         // 确保有 ID
                         if (selectedData.id) {
-                            // ✅ 传 ID 给父组件，而不是行号
+                            // 传 ID 给父组件，而不是行号
                             onDeleteRow(selectedData.id); 
                             setSelectedRecordId(null); // 重置选中状态
                         } else {
@@ -308,7 +307,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
       </div>
 
       <div className="ag-theme-alpine-dark flex-1 w-full h-full">
-        {/* 🚨【核心修改】注入炫酷的选中样式 */}
+        {/* 注入炫酷的选中样式 */}
         <style>{`
             .ag-theme-alpine-dark {
                 --ag-background-color: #111827; 
@@ -327,7 +326,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
                 font-weight: 600;
             }
 
-            /* 🌟 自定义选中行的左侧高亮条 */
+            /* 自定义选中行的左侧高亮条 */
             .ag-theme-alpine-dark .ag-row-selected {
                 border-left: 4px solid #00e5ff !important; /* 左侧亮条 */
                 transition: all 0.2s;
@@ -344,7 +343,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
                 border-color: transparent !important;
             }
 
-            /* 🚨 修复复选框在暗色模式下的可见性 */
+            /* 修复复选框在暗色模式下的可见性 */
             .ag-checkbox-input-wrapper {
                 font-size: 14px;
             }
@@ -352,10 +351,10 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
         
         <AgGridReact
 
-            // 🚨【新增】绑定 ref
+            // 绑定 ref
             ref={gridRef}
 
-            // 🚨【修复 1】解决 Error #239
+            // 解决 Error #239
             // 加上这个属性，允许你继续使用 ag-theme-alpine.css 和你的自定义样式
             theme="legacy" 
             
@@ -365,14 +364,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
             paginationPageSize={20}
             animateRows={true}
 
-            // // 🚨 监听行选中，为了获取要删除的行号
-            // onRowSelected={(event) => {
-            //     if (event.node.isSelected() && event.node.rowIndex !== null) {
-            //         setSelectedRowIndex(event.node.rowIndex);
-            //     }
-            // }}
-
-            // 🚨【关键修改 1】明确配置选择模式和复选框
+            // 明确配置选择模式和复选框
             // checkboxes: true 确保每行前面都有框 (虽然你可能通过其他方式实现了，但这样写最稳)
             // headerCheckbox: false 禁用全选，因为我们做的是单选联动
             rowSelection={{ 
@@ -380,20 +372,19 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
                 checkboxes: true,
             }}
             
-            // 🚨【关键修改 2】使用 onSelectionChanged 替代 onRowClicked
             // 无论点击行、复选框还是键盘操作，只要选中变了，这里都会触发
             onSelectionChanged={(event) => {
-                // 🛑 防死循环：如果选中操作是由 API 触发的（比如点击地图导致表格更新），就不再回传
+                // 防死循环：如果选中操作是由 API 触发的（比如点击地图导致表格更新），就不再回传
                 if (event.source === 'api') return;
 
                 const selectedRows = event.api.getSelectedRows();
-                // 1. 更新本地状态 (控制删行按钮的禁用状态)
+                // 更新本地状态 (为的是控制删行按钮的禁用状态)
                 if (selectedRows.length > 0) {
                     setSelectedRecordId(selectedRows[0].id); // 存 ID !
                 } else {
                     setSelectedRecordId(null);
                 }
-                // 2. 通知父组件
+                // 通知父组件
                 if (onRowClick) {
                     if (selectedRows.length > 0) {
                         onRowClick(selectedRows[0]);
