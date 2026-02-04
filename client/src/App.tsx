@@ -4,7 +4,7 @@ import MainLayout from './layouts/MainLayout';
 import LeftPanel from './features/workspace/components/LeftPanel';
 import DataPivot from './features/table/components/DataPivot';
 import MapView from './features/map/components/MapView';
-import { geoService } from './services/geoService';
+import { geoService , type PaginatedGeoResponse} from './services/geoService';
 // import { message, Modal } from 'antd';
 import { App as AntdApp } from 'antd'; // 1. 引入 App 组件 (重命名为 AntdApp 避免冲突)
 
@@ -13,26 +13,48 @@ function App() {
     // 这样弹出的 message 和 modal 就会跟随全局主题（变黑），且不会报错
     const { message, modal } = AntdApp.useApp();
 
-    // 用于存储已上传的文件数据
-    const [uploadedFilesData, setUploadedFilesData] = React.useState<Record<string, any>>({});
-
+    // ✅存储已加载的文件数据 (包括分页信息)
+    // 结构变为: { "文件名": { features: [...], pagination: {...}, type: 'FeatureCollection' } }
+    const [uploadedFilesData, setUploadedFilesData] = React.useState<Record<string, PaginatedGeoResponse>>({});
+    
     // 保存当前文件的 ID，用于后续发请求
     const [activeFileId, setActiveFileId] = useState<string>('');
-    
     // 当前激活的文件名 (用户正在看哪个文件)
     const [activeFileName, setActiveFileName] = useState<string>('');
-
     // 当前选中的要素属性（从表格点出来的）
     const [selectedFeature, setSelectedFeature] = useState<any>(null);
+    // 辅助: 获取当前文件的数据对象
+    const currentData = uploadedFilesData[activeFileName];
 
     /**
     * 一些辅助函数
     */
-    // 重新加载数据 (复用 handleSelectFile 的逻辑，但简化版)
-    const refreshFileData = async (fileId: string, fileName: string) => {
-        const res = await geoService.getFileContent(fileId);
-        if (res.code === 200) {
-            setUploadedFilesData(prev => ({ ...prev, [fileName]: res.data }));
+    // // 重新加载数据 (复用 handleSelectFile 的逻辑，但简化版)
+    // const refreshFileData = async (fileId: string, fileName: string) => {
+    //     const res = await geoService.getFileContent(fileId);
+    //     if (res.code === 200) {
+    //         setUploadedFilesData(prev => ({ ...prev, [fileName]: res.data }));
+    //     }
+    // };
+
+    // ✅加载/刷新数据 (支持分页)
+    const loadFileData = async (fileId: string, fileName: string, page = 1, pageSize = 20) => {
+        try {
+            message.loading({ content: '加载数据中...', key: 'loading' });
+            
+            // ✅调用新的分页接口
+            const res = await geoService.getFileData(fileId, page, pageSize);
+            
+            setUploadedFilesData(prev => ({
+                ...prev,
+                [fileName]: res // 保存整个分页响应对象
+            }));
+            
+            message.success({ content: `加载第 ${page} 页成功`, key: 'loading' });
+            return res;
+        } catch (err: any) {
+            console.error(err);
+            message.error({ content: '数据加载失败', key: 'loading' });
         }
     };
 
@@ -89,169 +111,228 @@ function App() {
             // 例如：setMapData(uploadedFilesData[fileName]);
             return;
         }
-        // 2. 内存里没有，说明是刷新过，或者新登录的
-        // 这时候不应该报错，而是应该去后端“捞”数据
-        // 先检查 fileId 是否存在
-        if (!fileId) {
-            console.warn(`文件 ${fileName} 没有 ID，无法从后端获取内容`);
-            return; // 如果没有 ID，直接结束，不再调用 getFileContent
+        
+        if (fileId) {
+            // ✅默认加载第一页
+            await loadFileData(fileId, fileName, 1, 20);
         }
-        try {
-            message.loading('正在加载数据...', 1);
-            // 假设你已经在 geoService 里写好了 getFileContent 方法
-            const res = await geoService.getFileContent(fileId); 
+
+        // // 2. 内存里没有，说明是刷新过，或者新登录的
+        // // 这时候不应该报错，而是应该去后端“捞”数据
+        // // 先检查 fileId 是否存在
+        // if (!fileId) {
+        //     console.warn(`文件 ${fileName} 没有 ID，无法从后端获取内容`);
+        //     return; // 如果没有 ID，直接结束，不再调用 getFileContent
+        // }
+        // try {
+        //     message.loading('正在加载数据...', 1);
+        //     // 假设你已经在 geoService 里写好了 getFileContent 方法
+        //     const res = await geoService.getFileContent(fileId); 
             
-            if (res.code === 200) {
-                // 3. 捞回来了！存入内存，下次就不用捞了
-                setUploadedFilesData(prev => ({
-                    ...prev,
-                    [fileName]: res.data
-                }));
+        //     if (res.code === 200) {
+        //         // 3. 捞回来了！存入内存，下次就不用捞了
+        //         setUploadedFilesData(prev => ({
+        //             ...prev,
+        //             [fileName]: res.data
+        //         }));
                 
-                // 4. 渲染地图
-                console.log('数据加载完成，开始渲染');
-            }
-        } catch (err) {
-            console.error('无法加载文件数据');
-        }
+        //         // 4. 渲染地图
+        //         console.log('数据加载完成，开始渲染');
+        //     }
+        // } catch (err) {
+        //     console.error('无法加载文件数据');
+        // }
+    };
+
+    // 回调: 表格翻页
+    const handlePageChange = async (page: number, pageSize: number) => {
+        if (!activeFileId || !activeFileName) return;
+        // 重新请求后端
+        await loadFileData(activeFileId, activeFileName, page, pageSize);
     };
 
     // 处理表格数据修改
     const handleDataChange = async (recordId: string | number, newRowData: any) => {
-        if (!activeFileName) return;
-        // 备份原始数据 (用于失败回滚)
-        // 注意：这里直接读取当前的 uploadedFilesData 状态
-        const currentFileData = uploadedFilesData[activeFileName]; 
-        let originalRecord: any = null;
-        if (currentFileData) {
-            // 根据数据类型找到当前这一行/要素的原始值
-            if (currentFileData.type === 'FeatureCollection' && Array.isArray(currentFileData.features)) {
-                // GeoJSON: 查找对应的 Feature
-                const target = currentFileData.features.find((f: any) => 
-                    f.properties?.id == recordId || f.id == recordId
-                );
-                // 深拷贝备份，防止引用被后续的 setUploadedFilesData 修改
-                if (target) originalRecord = JSON.parse(JSON.stringify(target));
-            } else if (Array.isArray(currentFileData)) {
-                // 普通数组: 查找对应的 Row
-                const target = currentFileData.find((row: any) => row.id == recordId);
-                // 浅拷贝备份即可 (假设对象只有一层)
-                if (target) originalRecord = JSON.parse(JSON.stringify(target));
-            }
-        }
-
-        console.log(`正在更新记录 ${recordId} 数据...`, newRowData);
-        // 1. 更新本地 React 状态 (实现 UI 的即时响应，地图属性会同步更新)
-        setUploadedFilesData(prev => {
-            const currentData = prev[activeFileName];
-            if (!currentData) return prev; // 安全检查
-            let updatedData = { ...currentData }; // 浅拷贝
-
-            // 判断数据类型并更新
-            if (currentData.type === 'FeatureCollection' && Array.isArray(currentData.features)) {
-                // GeoJSON: 更新 features 数组里的 properties
-                // 注意：DataPivot 里的 newRowData 是扁平化的，我们需要把 properties 覆盖回去
-                // 且不能覆盖 geometry，假设你的 ID 存在 properties.id 中 (根据之前的 csv 解析逻辑)
-                const targetIndex = currentData.features.findIndex((f: any) => 
-                    f.properties?.id == recordId || f.id == recordId
-                );
-                if (targetIndex === -1) {
-                    console.warn(`未找到记录 ${recordId}`);
-                    return prev; // 未找到记录，不做任何更新
-                }
-                const oldFeature = currentData.features[targetIndex];
-                
-                // 构造新的 Feature
-                const newFeature = {
-                    ...oldFeature,
-                    properties: {
-                        ...oldFeature.properties,
-                        ...newRowData // 覆盖修改的字段 (name, pop 等)，相同的键名，后面的会覆盖前面的
-                    }
-                };
-                
-                // 剔除掉 DataPivot 临时加的 _geometry, _cp 等字段 (如果有的话)
-                delete newFeature.properties._geometry;
-                delete newFeature.properties.cp; 
-
-                // 更新数组
-                updatedData.features = [...currentData.features];
-                updatedData.features[targetIndex] = newFeature;
-
-            } else if (Array.isArray(currentData)) {
-                const targetIndex = currentData.findIndex((row: any) => row.id == recordId);
-                if (targetIndex === -1) {
-                    console.warn(`未找到记录 ${recordId}`);
-                    return prev; // 未找到记录，不做任何更新
-                }
-
-                // 普通数组: 直接替换
-                updatedData = [...currentData];
-                updatedData[targetIndex] = { ...updatedData[targetIndex], ...newRowData };
-            }
-
-            return {
-                ...prev,
-                [activeFileName]: updatedData
-            };
-        });
-
-        // 2. 发送请求给后端保存 (真实调用，硬盘中保存)
-        try {
-            message.loading({ content: '正在保存修改...', key: 'save' });
-            
-            // 真实调用：调用 Service 层发送请求
-            // 注意：这里需要你在 geoService.ts 里实现 updateFileData 方法
-            const response = await geoService.updateFileData(activeFileId, recordId, newRowData);
-            
-            if (response.code === 200) {
-                message.success({ content: '保存成功', key: 'save' });
-                console.log('后端数据已更新:', response);
-            } else {
-                throw new Error(response.message || '后端返回错误');
-            }
-
-        } catch (error) {
-            console.error('保存失败', error);
-            message.error({ content: '保存失败，已自动还原修改', key: 'save' });
+        if (!activeFileName || !currentData) return;
         
-            // 失败回滚逻辑 
-            if (originalRecord) {
-                setUploadedFilesData(prev => {
-                    const currentData = prev[activeFileName];
-                    if (!currentData) return prev; // 安全检查
+        // 1. 乐观更新 (UI Update)
+        // 只能更新当前页的数据
+        const oldFeatures = [...currentData.features];
+        const targetIndex = oldFeatures.findIndex((f: any) => 
+            f.properties?.id == recordId || f.id == recordId
+        );
 
-                    // 这里的逻辑很简单：直接把备份的 originalRecord 塞回去
-                    let updatedData: any;
+        if (targetIndex === -1) return;
 
-                    if (currentData.type === 'FeatureCollection' && Array.isArray(currentData.features)) {
-                        updatedData = { ...currentData };
-                        const targetIndex = updatedData.features.findIndex((f: any) => 
-                            f.properties?.id == recordId || f.id == recordId
-                        );
-                        if (targetIndex !== -1) {
-                            updatedData.features = [...currentData.features];
-                            // 直接用备份覆盖，不仅仅是合并属性，而是完全恢复
-                            updatedData.features[targetIndex] = originalRecord;
-                        }
-                    } else if (Array.isArray(currentData)) {
-                        updatedData = [...currentData];
-                        const targetIndex = updatedData.findIndex((row: any) => row.id == recordId);
-                        if (targetIndex !== -1) {
-                            // 直接用备份覆盖
-                            updatedData[targetIndex] = originalRecord;
-                        }
-                    } else {
-                        return prev;
-                    }
-
-                    return {
-                        ...prev,
-                        [activeFileName]: updatedData
-                    };
-                });
+        // 构造新 Feature
+        const oldFeature = oldFeatures[targetIndex];
+        const newFeature = {
+            ...oldFeature,
+            properties: {
+                ...oldFeature.properties,
+                ...newRowData
             }
+        };
+        // 清理临时字段
+        delete newFeature.properties._geometry;
+        delete newFeature.properties.cp;
+
+        // 更新 State
+        const newFeatures = [...oldFeatures];
+        newFeatures[targetIndex] = newFeature;
+        
+        setUploadedFilesData(prev => ({
+            ...prev,
+            [activeFileName]: {
+                ...prev[activeFileName],
+                features: newFeatures
+            }
+        }));
+
+        // 2. 发送请求
+        try {
+            message.loading({ content: '保存中...', key: 'save' });
+            await geoService.updateFileData(activeFileId, recordId, newRowData);
+            message.success({ content: '已保存', key: 'save' });
+        } catch (error) {
+            message.error({ content: '保存失败', key: 'save' });
+            // 回滚逻辑 (简单重载当前页)
+            handlePageChange(currentData.pagination.page, currentData.pagination.pageSize);
         }
+
+        // // 备份原始数据 (用于失败回滚)
+        // // 注意：这里直接读取当前的 uploadedFilesData 状态
+        // const currentFileData = uploadedFilesData[activeFileName]; 
+        // let originalRecord: any = null;
+        // if (currentFileData) {
+        //     // 根据数据类型找到当前这一行/要素的原始值
+        //     if (currentFileData.type === 'FeatureCollection' && Array.isArray(currentFileData.features)) {
+        //         // GeoJSON: 查找对应的 Feature
+        //         const target = currentFileData.features.find((f: any) => 
+        //             f.properties?.id == recordId || f.id == recordId
+        //         );
+        //         // 深拷贝备份，防止引用被后续的 setUploadedFilesData 修改
+        //         if (target) originalRecord = JSON.parse(JSON.stringify(target));
+        //     } else if (Array.isArray(currentFileData)) {
+        //         // 普通数组: 查找对应的 Row
+        //         const target = currentFileData.find((row: any) => row.id == recordId);
+        //         // 浅拷贝备份即可 (假设对象只有一层)
+        //         if (target) originalRecord = JSON.parse(JSON.stringify(target));
+        //     }
+        // }
+
+        // console.log(`正在更新记录 ${recordId} 数据...`, newRowData);
+        // // 1. 更新本地 React 状态 (实现 UI 的即时响应，地图属性会同步更新)
+        // setUploadedFilesData(prev => {
+        //     const currentData = prev[activeFileName];
+        //     if (!currentData) return prev; // 安全检查
+        //     let updatedData = { ...currentData }; // 浅拷贝
+
+        //     // 判断数据类型并更新
+        //     if (currentData.type === 'FeatureCollection' && Array.isArray(currentData.features)) {
+        //         // GeoJSON: 更新 features 数组里的 properties
+        //         // 注意：DataPivot 里的 newRowData 是扁平化的，我们需要把 properties 覆盖回去
+        //         // 且不能覆盖 geometry，假设你的 ID 存在 properties.id 中 (根据之前的 csv 解析逻辑)
+        //         const targetIndex = currentData.features.findIndex((f: any) => 
+        //             f.properties?.id == recordId || f.id == recordId
+        //         );
+        //         if (targetIndex === -1) {
+        //             console.warn(`未找到记录 ${recordId}`);
+        //             return prev; // 未找到记录，不做任何更新
+        //         }
+        //         const oldFeature = currentData.features[targetIndex];
+                
+        //         // 构造新的 Feature
+        //         const newFeature = {
+        //             ...oldFeature,
+        //             properties: {
+        //                 ...oldFeature.properties,
+        //                 ...newRowData // 覆盖修改的字段 (name, pop 等)，相同的键名，后面的会覆盖前面的
+        //             }
+        //         };
+                
+        //         // 剔除掉 DataPivot 临时加的 _geometry, _cp 等字段 (如果有的话)
+        //         delete newFeature.properties._geometry;
+        //         delete newFeature.properties.cp; 
+
+        //         // 更新数组
+        //         updatedData.features = [...currentData.features];
+        //         updatedData.features[targetIndex] = newFeature;
+
+        //     } else if (Array.isArray(currentData)) {
+        //         const targetIndex = currentData.findIndex((row: any) => row.id == recordId);
+        //         if (targetIndex === -1) {
+        //             console.warn(`未找到记录 ${recordId}`);
+        //             return prev; // 未找到记录，不做任何更新
+        //         }
+
+        //         // 普通数组: 直接替换
+        //         updatedData = [...currentData];
+        //         updatedData[targetIndex] = { ...updatedData[targetIndex], ...newRowData };
+        //     }
+
+        //     return {
+        //         ...prev,
+        //         [activeFileName]: updatedData
+        //     };
+        // });
+
+        // // 2. 发送请求给后端保存 (真实调用，硬盘中保存)
+        // try {
+        //     message.loading({ content: '正在保存修改...', key: 'save' });
+            
+        //     // 真实调用：调用 Service 层发送请求
+        //     // 注意：这里需要你在 geoService.ts 里实现 updateFileData 方法
+        //     const response = await geoService.updateFileData(activeFileId, recordId, newRowData);
+            
+        //     if (response.code === 200) {
+        //         message.success({ content: '保存成功', key: 'save' });
+        //         console.log('后端数据已更新:', response);
+        //     } else {
+        //         throw new Error(response.message || '后端返回错误');
+        //     }
+
+        // } catch (error) {
+        //     console.error('保存失败', error);
+        //     message.error({ content: '保存失败，已自动还原修改', key: 'save' });
+        
+        //     // 失败回滚逻辑 
+        //     if (originalRecord) {
+        //         setUploadedFilesData(prev => {
+        //             const currentData = prev[activeFileName];
+        //             if (!currentData) return prev; // 安全检查
+
+        //             // 这里的逻辑很简单：直接把备份的 originalRecord 塞回去
+        //             let updatedData: any;
+
+        //             if (currentData.type === 'FeatureCollection' && Array.isArray(currentData.features)) {
+        //                 updatedData = { ...currentData };
+        //                 const targetIndex = updatedData.features.findIndex((f: any) => 
+        //                     f.properties?.id == recordId || f.id == recordId
+        //                 );
+        //                 if (targetIndex !== -1) {
+        //                     updatedData.features = [...currentData.features];
+        //                     // 直接用备份覆盖，不仅仅是合并属性，而是完全恢复
+        //                     updatedData.features[targetIndex] = originalRecord;
+        //                 }
+        //             } else if (Array.isArray(currentData)) {
+        //                 updatedData = [...currentData];
+        //                 const targetIndex = updatedData.findIndex((row: any) => row.id == recordId);
+        //                 if (targetIndex !== -1) {
+        //                     // 直接用备份覆盖
+        //                     updatedData[targetIndex] = originalRecord;
+        //                 }
+        //             } else {
+        //                 return prev;
+        //             }
+
+        //             return {
+        //                 ...prev,
+        //                 [activeFileName]: updatedData
+        //             };
+        //         });
+        //     }
+        // }
     };
 
     // 1. 新增行处理
@@ -264,8 +345,10 @@ function App() {
             await geoService.addRow(activeFileId);
             
             message.success({ content: '新增成功', key: 'row-op' });
-            // 重新拉取最新数据刷新界面
-            refreshFileData(activeFileId, activeFileName);
+            // 刷新当前页
+            if (currentData) {
+                handlePageChange(currentData.pagination.page, currentData.pagination.pageSize);
+            }
         } catch (e: any) {
             message.error({ content: e.message, key: 'row-op' });
         }
@@ -278,7 +361,9 @@ function App() {
             message.loading({ content: '正在删除行...', key: 'row-op' });
             await geoService.deleteRow(activeFileId, recordID);
             message.success({ content: '删除成功', key: 'row-op' });
-            refreshFileData(activeFileId, activeFileName);
+            if (currentData) {
+                handlePageChange(currentData.pagination.page, currentData.pagination.pageSize);
+            }
         } catch (e: any) {
             message.error({ content: e.message, key: 'row-op' });
         }
@@ -304,7 +389,7 @@ function App() {
                     message.loading({ content: '正在添加列...', key: 'col-op' });
                     await geoService.addColumn(activeFileId, value);
                     message.success({ content: '添加成功', key: 'col-op' });
-                    refreshFileData(activeFileId, activeFileName);
+                    if (currentData) handlePageChange(currentData.pagination.page, currentData.pagination.pageSize);
                 } catch (e: any) {
                     message.error({ content: e.message, key: 'col-op' });
                 }
@@ -319,13 +404,11 @@ function App() {
             message.loading({ content: '正在删除列...', key: 'col-op' });
             await geoService.deleteColumn(activeFileId, fieldName);
             message.success({ content: '删除成功', key: 'col-op' });
-            refreshFileData(activeFileId, activeFileName);
+            if (currentData) handlePageChange(currentData.pagination.page, currentData.pagination.pageSize);
         } catch (e: any) {
             message.error({ content: e.message, key: 'col-op' });
         }
     };
-
-
 
   return (
     <MainLayout>
@@ -337,23 +420,31 @@ function App() {
 
       {/* 第 2 个子元素：中间 (直接放组件，不需要再包 div 了) */}
       <DataPivot 
-          data={uploadedFilesData[activeFileName]} 
+          // ✅ data 这里只传 features 数组给表格显示  
+          data={currentData?.features || []} 
           fileName={activeFileName} 
+          // ✅ 传入分页对象
+          pagination={currentData?.pagination}
+          // ✅ 传入翻页回调
+          onPageChange={handlePageChange}
+
           // 当表格行被点击时，更新 App 的状态
           onRowClick={(record) => setSelectedFeature(record)}
           selectedFeature={selectedFeature}
           // 传入修改回调
           onDataChange={handleDataChange}
-          // 传入新方法
+          // 传入行列增删
           onAddRow={handleAddRow}
           onDeleteRow={handleDeleteRow}
           onAddColumn={handleAddColumn}
           onDeleteColumn={handleDeleteColumn}
+          
       />
 
       {/* 第 3 个子元素：右侧 (直接放组件) */}
       <MapView 
-          data={uploadedFilesData[activeFileName]} 
+          // data={uploadedFilesData[activeFileName]} 
+          data={currentData ? { type: 'FeatureCollection', features: currentData.features } : null} 
           fileName={activeFileName}
           // 传入选中的要素，用于高亮和弹窗
           selectedFeature={selectedFeature}

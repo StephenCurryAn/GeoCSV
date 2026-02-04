@@ -154,10 +154,10 @@ class GeoService {
    * 替代原有的全量 getFileContent
    * @param id 文件ID
    * @param page 页码 (默认 1)
-   * @param pageSize 每页数量 (默认 100)
+   * @param pageSize 每页数量 (默认 20)
    */
-  async getFileData(id: string, page = 1, pageSize = 100): Promise<PaginatedGeoResponse> {
-    // 对应后端路由: GET /api/files/:id/data?page=1&pageSize=100
+  async getFileData(id: string, page = 1, pageSize = 20): Promise<PaginatedGeoResponse> {
+    // 对应后端路由: GET /api/files/:id/data?page=1&pageSize=20
     const response = await apiClient.get<PaginatedGeoResponse>(`/files/${id}/data`, {
       params: { page, pageSize }
     });
@@ -174,7 +174,12 @@ class GeoService {
    */
   async uploadFile(files: File[], parentId: string | null = null): Promise<UploadResponse> {
     const formData = new FormData();
-    files.forEach((file) => formData.append('files', file));
+    // 兼容 FileList 和 Array
+    if (files instanceof FileList) {
+        Array.from(files).forEach((file) => formData.append('files', file));
+    } else {
+        files.forEach((file) => formData.append('files', file));
+    }
     
     // 只有当 parentId 存在且有效时才添加
     if (parentId) {
@@ -182,12 +187,13 @@ class GeoService {
     }
 
     // 对应后端路由: POST /api/files/upload
-    const response = await apiClient.post<{ data: UploadResponse }>('/files/upload', formData, {
+    const res = await apiClient.post<{ data: UploadResponse }>('/files/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
     
     // 返回后端响应中的 data 字段 (包含 _id, totalFeatures 等)
-    return response.data.data;
+    // 第一个data是默认的属性值（res.data），第二个data是我定义的变量名称
+    return res.data.data;
   }
 
   /**

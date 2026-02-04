@@ -3,7 +3,7 @@ import 'ag-grid-community/styles/ag-theme-alpine.css';
 import React, { useEffect, useState, useRef } from 'react';
 import { AgGridReact } from 'ag-grid-react'; 
 import { type ColDef, ModuleRegistry, AllCommunityModule } from 'ag-grid-community'; 
-import { Empty, Button, Space, Popconfirm, message } from 'antd'; // ... 引入 antd 组件
+import { Empty, Button, Space, Popconfirm, message, Pagination } from 'antd'; // ... 引入 antd 组件
 import { PlusOutlined, DeleteOutlined, TableOutlined, MinusSquareOutlined, DownloadOutlined } from '@ant-design/icons';
 import { center } from '@turf/turf'; // 引入 center 计算
 
@@ -12,57 +12,72 @@ import { center } from '@turf/turf'; // 引入 center 计算
 ModuleRegistry.registerModules([ AllCommunityModule ]);
 
 interface DataPivotProps {
-  data: any;          
-  fileName: string;   
-  // 接收父组件传来的回调，行点击
-  onRowClick?: (record: any) => void;
-  // 接收选中的 Feature
-  selectedFeature?: any;
-  // 数据变更回调 (通知父组件保存)
-  onDataChange?: (recordId: string | number, newData: any) => void;
-  // 行列操作回调
-  onAddRow?: () => void;
-  onDeleteRow?: (recordId: string | number) => void;
-  onAddColumn?: () => void;
-  onDeleteColumn?: (fieldName: string) => void;
+    data: any;          
+    fileName: string;   
+    // ✅ 新增分页 Props
+    pagination?: {
+    total: number;
+    page: number;
+    pageSize: number;
+    };
+    onPageChange?: (page: number, pageSize: number) => void;
+
+    // 接收父组件传来的回调，行点击
+    onRowClick?: (record: any) => void;
+    // 接收选中的 Feature
+    selectedFeature?: any;
+    // 数据变更回调 (通知父组件保存)
+    onDataChange?: (recordId: string | number, newData: any) => void;
+    // 行列操作回调
+    onAddRow?: () => void;
+    onDeleteRow?: (recordId: string | number) => void;
+    onAddColumn?: () => void;
+    onDeleteColumn?: (fieldName: string) => void;
 }
 
-const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selectedFeature, onDataChange, onAddRow, onDeleteRow, onAddColumn, onDeleteColumn }) => {
-  // Grid 引用，用于调用 API
-  const gridRef = useRef<AgGridReact>(null);
-  // 表格的行数据   
-  const [rowData, setRowData] = useState<any[]>([]);
-  // 表格列的配置蓝图
-  const [columnDefs, setColumnDefs] = useState<ColDef[]>([]);
-  // 记录当前选中的行索引，用于删除行
-  const [selectedRecordId, setSelectedRecordId] = useState<string | number | null>(null);
+const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, pagination, onPageChange, 
+    onRowClick, selectedFeature, onDataChange, 
+    onAddRow, onDeleteRow, onAddColumn, onDeleteColumn }) => {
+    // Grid 引用，用于调用 API
+    const gridRef = useRef<AgGridReact>(null);
+    // 表格的行数据   
+    const [rowData, setRowData] = useState<any[]>([]);
+    // 表格列的配置蓝图
+    const [columnDefs, setColumnDefs] = useState<ColDef[]>([]);
+    // 记录当前选中的行索引，用于删除行
+    const [selectedRecordId, setSelectedRecordId] = useState<string | number | null>(null);
 
-  useEffect(() => {
-    if (!data) {
-      setRowData([]);
-      setColumnDefs([]);
-      return;
+    // data 现在直接是数组了，不需要判断 FeatureCollection 
+    useEffect(() => {
+    if (!data || data.length === 0) {
+        setRowData([]);
+        setColumnDefs([]);
+        return;
     }
+    // ✅data 是 features 数组，直接处理
+    // 因为App组件中是data={currentData?.features || []}传过来的数组 
+    processGeoJSONFeatures(data);
 
-    const ext = fileName.split('.').pop()?.toLowerCase();
-    if (
-        ext === 'json' || 
-        ext === 'geojson' || 
-        ext === 'shp' || 
-        (data.type === 'FeatureCollection' && Array.isArray(data.features))
-    ) {
-      processGeoJSON(data);
-    } else {
-      // 处理普通数组 (CSV/Excel 转换来的)
-      if (Array.isArray(data)) {
-        processArrayData(data);
-      }
-    }
+    // 原来的分类处理
+    // const ext = fileName.split('.').pop()?.toLowerCase();
+    // if (
+    //     ext === 'json' || 
+    //     ext === 'geojson' || 
+    //     ext === 'shp' || 
+    //     (data.type === 'FeatureCollection' && Array.isArray(data.features))
+    // ) {
+    //   processGeoJSON(data);
+    // } else {
+    //   // 处理普通数组 (CSV/Excel 转换来的)
+    //   if (Array.isArray(data)) {
+    //     processArrayData(data);
+    //   }
+    // }
 
-  }, [data, fileName]);
+    }, [data, fileName]);
 
-  // 监听 selectedFeature，同步高亮表格行
-  useEffect(() => {
+    // 监听 selectedFeature，同步高亮表格行
+    useEffect(() => {
     // 先把 API 赋值给局部变量，解决 "gridRef.current is possibly null" 报错
     // 使用可选链 ?. 确保安全访问
     // api 的值是 AG Grid 库在组件初始化完成后，自动挂载到你的 Ref 对象上的
@@ -87,19 +102,19 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
         // 如果 selectedFeature 为空，取消所有选中
         api.deselectAll();
     }
-  }, [selectedFeature]);
+    }, [selectedFeature]);
 
-  /**
-   * 通用列定义生成函数 (修复 Warning #48)
-   */
-  const generateColumnDefs = (rows: any[]) => {
+    /**
+     * 通用列定义生成函数 (修复 Warning #48)
+     */
+    const generateColumnDefs = (rows: any[]) => {
     if (rows.length === 0) return [];
     // 定义不可编辑的字段 (例如 ID 和 坐标)
     const readOnlyFields = ['id', '_geometry', 'cp', '_cp', '_lng', '_lat', '_geom_coords'];
     const keys = Object.keys(rows[0]);
     return keys
-      .filter(k => !['_cp'].includes(k))
-      .map(key => ({
+        .filter(k => !['_cp'].includes(k))
+        .map(key => ({
         field: key,
         // 自定义表头名称 (让显示更友好)
         headerName: (() => {
@@ -122,50 +137,56 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
 
         // 如果值是对象或数组（比如 "cp": [120, 30]），转成字符串显示，解决 Warning #48
         valueFormatter: (params: any) => {
-          const val = params.value;
-          if (typeof val === 'object' && val !== null) {
+            const val = params.value;
+            if (typeof val === 'object' && val !== null) {
             return JSON.stringify(val); 
-          }
-          return val;
+            }
+            return val;
         }
-      }));
-  };
+        }));
+    };
 
-  const processGeoJSON = (geoData: any) => {
-    if (geoData.type === 'FeatureCollection' && Array.isArray(geoData.features)) {
-      const rows = geoData.features.map((feature: any) => {
-        let cp = feature.properties.cp;
+    // ✅把 processGeoJSON 改造一下，只处理 features 数组
+    const processGeoJSONFeatures = (features: any[]) => {
+        const rows = features.map((feature: any) => {
         
-        // 如果没有 cp 或 cp 是字符串 ，尝试修复
-        // JSON.parse 是把 JSON 格式的字符串 转换成 JavaScript 对象或数组
+        // ✅这段计算的代码，后续要移到后端
+        // 原有的提取 cp, geometry 逻辑保持不变
+        let cp = feature.properties?.cp;
+        // cp 解析逻辑
+        // 如果 cp 是字符串 (CSV读取时常见)，尝试解析为数组
         if (typeof cp === 'string') {
             try { cp = JSON.parse(cp); } catch(e) {}
         }
-        // 依然没有，则计算
+        // 如果依然没有有效的 cp 且存在几何数据，使用 Turf.js 计算中心点
+        // (需要确保头部引入了: import { center } from '@turf/turf';)
         if ((!cp || !Array.isArray(cp)) && feature.geometry) {
             try {
                 const c = center(feature);
                 cp = c.geometry.coordinates;
             } catch(e) {}
         }
-        // 准备基础属性
+        
+        // --- 2. 构造基础行数据 ---
+        // 将 properties 扁平化，并添加辅助字段
         const row = {
-          ...feature.properties,
+          ...feature.properties, // 扁平化属性
           cp: cp, 
-          _geometry: feature.geometry?.type || 'Unknown' 
+          _geometry: feature.geometry?.type || 'Unknown'
+          // ...
         };
-
-        // 注入导出用的几何字段
+        
+        // --- 3. 注入导出用的几何字段 (用于 CSV 导出) ---
         if (feature.geometry) {
             const gType = feature.geometry.type;
             const coords = feature.geometry.coordinates;
 
             if (gType === 'Point' && Array.isArray(coords) && coords.length >= 2) {
-                // 如果是点，拆分成两列，方便 CSV 导出后直接用
+                // 如果是点，拆分成 _lng 和 _lat 两列，方便导出后直接查看
                 row['_lng'] = coords[0];
                 row['_lat'] = coords[1];
             } else {
-                // 如果是面/线，把复杂的坐标数组转成字符串
+                // 如果是面/线，把复杂的坐标数组转成字符串保存
                 // 这样导出 CSV 时，这一格会包含完整的几何结构数据
                 row['_geom_coords'] = JSON.stringify(coords);
             }
@@ -174,21 +195,67 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
       });
 
       setRowData(rows);
-      // 使用提取出来的通用函数
       setColumnDefs(generateColumnDefs(rows));
-    } else {
-        console.warn('不是标准的 FeatureCollection GeoJSON');
-    }
-  };
+    };
 
-  const processArrayData = (arr: any[]) => {
-      setRowData(arr);
-      // 使用提取出来的通用函数
-      setColumnDefs(generateColumnDefs(arr));
-  }
+    // const processGeoJSON = (geoData: any) => {
+    //     if (geoData.type === 'FeatureCollection' && Array.isArray(geoData.features)) {
+    //       const rows = geoData.features.map((feature: any) => {
+    //         let cp = feature.properties.cp;
+            
+    //         // 如果没有 cp 或 cp 是字符串 ，尝试修复
+    //         // JSON.parse 是把 JSON 格式的字符串 转换成 JavaScript 对象或数组
+    //         if (typeof cp === 'string') {
+    //             try { cp = JSON.parse(cp); } catch(e) {}
+    //         }
+    //         // 依然没有，则计算
+    //         if ((!cp || !Array.isArray(cp)) && feature.geometry) {
+    //             try {
+    //                 const c = center(feature);
+    //                 cp = c.geometry.coordinates;
+    //             } catch(e) {}
+    //         }
+    //         // 准备基础属性
+    //         const row = {
+    //           ...feature.properties,
+    //           cp: cp, 
+    //           _geometry: feature.geometry?.type || 'Unknown' 
+    //         };
 
-  // 导出 CSV 处理函数
-  const handleExportCSV = () => {
+    //         // 注入导出用的几何字段
+    //         if (feature.geometry) {
+    //             const gType = feature.geometry.type;
+    //             const coords = feature.geometry.coordinates;
+
+    //             if (gType === 'Point' && Array.isArray(coords) && coords.length >= 2) {
+    //                 // 如果是点，拆分成两列，方便 CSV 导出后直接用
+    //                 row['_lng'] = coords[0];
+    //                 row['_lat'] = coords[1];
+    //             } else {
+    //                 // 如果是面/线，把复杂的坐标数组转成字符串
+    //                 // 这样导出 CSV 时，这一格会包含完整的几何结构数据
+    //                 row['_geom_coords'] = JSON.stringify(coords);
+    //             }
+    //         }
+    //         return row;
+    //       });
+
+    //       setRowData(rows);
+    //       // 使用提取出来的通用函数
+    //       setColumnDefs(generateColumnDefs(rows));
+    //     } else {
+    //         console.warn('不是标准的 FeatureCollection GeoJSON');
+    //     }
+    //   };
+    // const processArrayData = (arr: any[]) => {
+    //     setRowData(arr);
+    //     // 使用提取出来的通用函数
+    //     setColumnDefs(generateColumnDefs(arr));
+    // }
+
+    // 导出 CSV 处理函数
+    
+    const handleExportCSV = () => {
     if (gridRef.current && gridRef.current.api) {
         // 使用 AG Grid 原生导出功能
         gridRef.current.api.exportDataAsCsv({
@@ -201,28 +268,28 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
     } else {
         message.error('表格未就绪，无法导出');
     }
-  };
+    };
 
-  if (!data || rowData.length === 0) {
+    if (!data || rowData.length === 0) {
     return (
-      <div className="h-full flex flex-col items-center justify-center bg-[#1f2937] rounded text-gray-400">
-         <Empty description={<span className="text-gray-400">请在左侧选择文件以查看属性表</span>} />
-      </div>
+        <div className="h-full flex flex-col items-center justify-center bg-[#1f2937] rounded text-gray-400">
+            <Empty description={<span className="text-gray-400">请在左侧选择文件以查看属性表</span>} />
+        </div>
     );
-  }
+    }
 
-  return (
+    return (
     <div className="flex flex-col h-full">
-      {/* <div className="mb-2 px-2 text-xs text-blue-400 font-mono flex justify-between">
+        {/* <div className="mb-2 px-2 text-xs text-blue-400 font-mono flex justify-between">
         <span>当前文件: {fileName}</span>
         <span>记录数: {rowData.length}</span>
-      </div> */}
+        </div> */}
 
-      {/* 工具栏 */}
-      <div className="bg-[#1f2937] p-2 border-b border-gray-700 flex justify-between items-center">
+        {/* 工具栏 */}
+        <div className="bg-[#1f2937] p-2 border-b border-gray-700 flex justify-between items-center">
         <div className="text-xs text-blue-400 font-mono">
-          <span>{fileName}</span>
-          <span className="ml-2 text-gray-500">({rowData.length} records)</span>
+            <span>{fileName}</span>
+            <span className="ml-2 text-gray-500">({rowData.length} records)</span>
         </div>
         
         {/* 操作按钮组 */}
@@ -296,17 +363,17 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
                 icon={<MinusSquareOutlined />} 
                 className="bg-gray-700 text-white border-gray-600"
                 onClick={() => {
-                   // 简单的交互：让用户输入要删除的列名 (进阶版应该做一个下拉选框Modal)
-                   const col = prompt("请输入要删除的列名（注意：id, name, cp 禁止删除）:");
-                   if (col && onDeleteColumn) onDeleteColumn(col);
+                    // 简单的交互：让用户输入要删除的列名 (进阶版应该做一个下拉选框Modal)
+                    const col = prompt("请输入要删除的列名（注意：id, name, cp 禁止删除）:");
+                    if (col && onDeleteColumn) onDeleteColumn(col);
                 }}
             >
                 删列
             </Button>
         </Space>
-      </div>
+        </div>
 
-      <div className="ag-theme-alpine-dark flex-1 w-full h-full">
+        <div className="ag-theme-alpine-dark flex-1 w-full h-full">
         {/* 注入炫酷的选中样式 */}
         <style>{`
             .ag-theme-alpine-dark {
@@ -360,8 +427,11 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
             
             rowData={rowData}
             columnDefs={columnDefs}
-            pagination={true}
-            paginationPageSize={20}
+
+            // ✅关闭 AG Grid 的全量分页，因为我们只给了它一页数据
+            pagination={false}
+            // paginationPageSize={20}
+
             animateRows={true}
 
             // 明确配置选择模式和复选框
@@ -404,9 +474,35 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, onRowClick, selec
                 }
             }}
         />
-      </div>
+        </div> 
+        {/* 3. ✅ 新增：底部服务器分页条 */}
+        {pagination && (
+            <div className="bg-[#111827] border-t border-gray-700 p-2 flex justify-end">
+                <Pagination 
+                    size="small"
+                    current={pagination.page}
+                    total={pagination.total}
+                    pageSize={pagination.pageSize}
+                    onChange={(page, pageSize) => {
+                        if (onPageChange) onPageChange(page, pageSize);
+                    }}
+                    showSizeChanger
+                    showTotal={(total) => <span className="text-gray-400">共 {total} 条数据</span>}
+                    className="custom-pagination"
+                />
+                {/* 注入分页条样式适配暗色模式 */}
+                <style>{`
+                    .custom-pagination .ant-pagination-item a { color: #e5e7eb; }
+                    .custom-pagination .ant-pagination-item-active { background: transparent; border-color: #3b82f6; }
+                    .custom-pagination .ant-pagination-item-active a { color: #3b82f6; }
+                    .custom-pagination .ant-pagination-prev .ant-pagination-item-link,
+                    .custom-pagination .ant-pagination-next .ant-pagination-item-link { color: #9ca3af; }
+                    .custom-pagination .ant-select-selector { background: #1f2937 !important; color: white !important; border-color: #374151 !important; }
+                `}</style>
+            </div>
+        )}
     </div>
-  );
+    );
 };
 
 export default DataPivot;

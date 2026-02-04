@@ -905,9 +905,9 @@ export const getFileTree = async (req: Request, res: Response) => {
 export const getFileData = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
-        // 获取分页参数，默认为第一页，每页 100 条
+        // 获取分页参数，默认为第一页，每页 20 条
         const page = parseInt(req.query.page as string) || 1;
-        const pageSize = parseInt(req.query.pageSize as string) || 100;
+        const pageSize = parseInt(req.query.pageSize as string) || 20;
 
         // 1. 检查文件是否存在
         const fileNode = await FileNode.findById(id);

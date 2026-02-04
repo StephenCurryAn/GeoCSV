@@ -3,7 +3,7 @@ import { Tree, Button, Empty, Input, Dropdown, type MenuProps, App as AntdApp } 
 import { FolderAddOutlined, CloudUploadOutlined, FileTextOutlined, GlobalOutlined,
          FileImageOutlined, TableOutlined, FolderFilled, CheckOutlined,
          DownOutlined, DeleteOutlined, EditOutlined, ExclamationCircleOutlined} from '@ant-design/icons';
-import { geoService, type UploadResponse } from '../../../services/geoService';
+import { geoService} from '../../../services/geoService';
 
 // FileTreeProps接口，实现子组件传导数据到父组件的接口
 export interface FileTreeProps {
@@ -279,40 +279,42 @@ const FileTree: React.FC<FileTreeProps> = ({ onDataLoaded, onSelectFile }) => {
     const hideLoading = message.loading('正在上传并解析...', 0);
 
     try {
-        // 调用 geoService 里的新方法 (支持 FileList)
-        const response: UploadResponse = await geoService.uploadGeoData(files, targetParentId);
-        
-        hideLoading();
+      // 1. 调用上传接口 (只返回 metadata)
+      // 注意：这里要用 uploadFile，不要用 uploadGeoData
+      const response = await geoService.uploadFile(Array.from(files), targetParentId);
+      
+      hideLoading();
 
-        if (response.code === 200 && response.data) {
-            message.success(`${response.data.fileName} 上传成功！`);
-            // 1. 通知父组件显示数据
-            if (response.data.geoJson) {
-                onDataLoaded(response.data.fileName, response.data.geoJson, response.data._id);
-            }
-            // 2. 构造新节点
-            const newFileNode: TreeNode = {
-                key: response.data._id,
-                title: response.data.fileName,
-                type: 'file',
-                rawFileName: response.data.fileName,
-                isLeaf: true
-            };
-            // 3. 更新树
-            setTreeData(prev => {
-                if (targetParentId) {
-                    return insertNodeToTree(prev, targetParentId, newFileNode);
-                } else {
-                    return [...prev, newFileNode];
-                }
-            });
-            // 4. 选中新文件
-            setSelectedKeys([newFileNode.key]);       
-            // 5. 稍微延迟刷新全树
-            setTimeout(fetchFileTree, 500);
-        } else {
-            throw new Error(response.message || '上传未返回有效数据');
-        }
+      if (response) { // response 就是 data.data
+          message.success(`${response.fileName} 上传成功！`);
+          
+          // 2. ✅【关键修改】上传成功后，立即请求第一页数据
+          // 因为后端不再返回 geoJson，前端需要自己去拉
+          const firstPageData = await geoService.getFileData(response._id, 1, 20);
+
+          // 3. 通知父组件 (App) 数据已就绪
+          onDataLoaded(response.fileName, firstPageData, response._id);
+
+          // 4. 更新树节点 (保持不变)
+          const newFileNode: TreeNode = {
+              key: response._id,
+              title: response.fileName,
+              type: 'file',
+              rawFileName: response.fileName,
+              isLeaf: true
+          };
+          
+          setTreeData(prev => {
+              if (targetParentId) {
+                  return insertNodeToTree(prev, targetParentId, newFileNode);
+              } else {
+                  return [...prev, newFileNode];
+              }
+          });
+          setSelectedKeys([newFileNode.key]);       
+          setTimeout(fetchFileTree, 500);
+      }
+
     } catch (error: any) {
         hideLoading();
         message.error(`上传失败: ${error.message}`);
