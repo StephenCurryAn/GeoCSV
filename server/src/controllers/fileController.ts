@@ -3,6 +3,7 @@
 // Multer存到硬盘之后，但是控制器还不知道这个文件路径是什么，所以需要req                                                                                                   │
 // 先进行Multer存硬盘这个步骤，然后进行控制器处理数据这个步骤，并返回回复
 
+// import mongoose, { Document, Schema } from 'mongoose';
 import e, { Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -11,6 +12,7 @@ import Papa from 'papaparse';
 import iconv from 'iconv-lite';
 import jschardet from 'jschardet';
 import FileNode from '../models/FileNode'; // 导入文件节点模型
+import Feature from '../models/Feature'; // 引入 Feature 模型
 
 const fsPromises = fs.promises; // 使用这种方式获取 promises，兼容性最好，防止 undefined 报错
 // 全局环境补丁 (模拟浏览器环境)
@@ -634,8 +636,33 @@ export const uploadFile = async (req: Request, res: Response) => {
         // 保存到数据库
         const savedFileNode = await fileNode.save();
 
+        // ✅新增重构：将解析出的要素存入 Feature 集合
+        if (parsedData) {
+            // 情况 A: GeoJSON FeatureCollection
+            if (parsedData.type === 'FeatureCollection' && Array.isArray(parsedData.features)) {
+                console.log(`[Database] 正在将 ${parsedData.features.length} 个要素写入 MongoDB...`);
+                
+                // 构造要插入的文档数组
+                const featuresToInsert = parsedData.features.map((f: any) => ({
+                    fileId: savedFileNode._id, // 关联外键
+                    type: 'Feature',
+                    geometry: f.geometry,
+                    properties: f.properties
+                }));
+
+                // 批量插入 (使用 ordered: false 提高性能，即使某一条失败也不阻塞其他)
+                await Feature.insertMany(featuresToInsert, { ordered: false });
+                console.log(`[Database] 写入完成`);
+            }
+            // 情况 B: 普通数组 (纯 CSV 表格)
+            // 暂时跳过，或者需要修改 Feature Model 来支持无 Geometry 的数据。
+            // 目前只处理带地理信息的 Feature。
+        }
+
         // 成功响应
         // 这里要和前端的 geoService.ts 中的 UploadResponse 接口对应
+        // 🔺注意：不再返回全量 geoJson，防止前端卡死。
+        // 🔺前端稍后会调用 getFileData 获取第一页数据。
         res.status(200).json({
             code: 200,
             message: '文件上传并解析成功',
@@ -643,9 +670,10 @@ export const uploadFile = async (req: Request, res: Response) => {
                 // 前端调用时会用到这些字段，名称注意要一致
                 _id: savedFileNode._id,        // 返回数据库记录的ID
                 fileName: mainOriginalName, // 返回原始文件名 (注意：这里是 fileName，不是 filename)
-                geoJson: parsedData,            // 返回解析后的 GeoJSON 数据
+                // geoJson: parsedData,            // 返回解析后的 GeoJSON 数据
                 fileSize: savedFileNode.size,        // 文件大小
-                fileType: mainExt         // 文件类型
+                fileType: mainExt,         // 文件类型
+                totalFeatures: parsedData?.features?.length || 0 // 告知前端有多少数据
             }
         });
 
@@ -822,49 +850,112 @@ export const getFileTree = async (req: Request, res: Response) => {
     }
 };
 
+// // （建议在需要保存csv的时候再使用）
+// /**
+//  * 获取文件内容 控制器
+//  * 控制器作用：读取 指定 文件的内容并返回给客户端
+//  * 用于前端点击文件时，通过 ID 获取文件内容 (按需加载)
+//  */
+// export const getFileContent = async (req: Request, res: Response) => {
+//     try {
+//         console.log('🔥 这里的代码被执行了吗？ID是:', req.params.id);
+//         // req.params 是 Request Parameters（请求参数）
+//         // 前端发起请求的时候，类似于http://localhost:3000/api/files/content/65a1b2c...
+//         // “id”是router.get('/content/:id', getFileContent);中定义的
+//         // 其告诉框架：“嘿，content/ 后面跟着的那一串东西，不是固定的路径，而是一个变量（占位符）。”
+//         const { id } = req.params; 
+//         const fileNode = await FileNode.findById(id);
+
+//         if (!fileNode) {
+//             return res.status(404).json({ code: 404, message: '文件记录不存在' });
+//         }
+
+//         // 先检查 path 是否存在
+//         // 如果是文件夹类型，或者数据异常，path 可能为空
+//         if (!fileNode.path) {
+//             return res.status(400).json({ code: 400, message: '文件路径不存在，无法读取' });
+//         }
+
+//         // 使用绝对路径 (解决 Windows 下路径拼接问题)
+//         // 数据库存的是 relative path (uploads/xx.json)，读取时要转为 absolute path
+//         // path.resolve会把参数里的路径片段拼起来，并确保生成一个绝对路径
+//         const absolutePath = path.resolve(process.cwd(), fileNode.path);
+
+//         // 将 readFileSync 改为异步 await readFile，并增加文件丢失的捕获
+//         try {
+//             // readAndParseFile 现在支持自动寻找 .dbf
+//             const { data } = await readAndParseFile(absolutePath, fileNode.extension);
+//             res.status(200).json({ code: 200, data: data });
+//         } catch (readError: any) {
+//             if (readError.message && readError.message.includes('物理文件')) {
+//                 return res.status(404).json({ code: 404, message: '物理文件丢失或不完整' });
+//             }
+//             throw readError;
+//         }
+//     } catch (error: any) {
+//         console.error('获取内容失败:', error);
+//         res.status(500).json({ code: 500, message: error.message });
+//     }
+// };
+
 /**
- * 获取文件内容 控制器
- * 控制器作用：读取 指定 文件的内容并返回给客户端
- * 用于前端点击文件时，通过 ID 获取文件内容 (按需加载)
+ * 获取文件数据 (分页模式) - 取代全量 getFileContent
+ * GET /api/files/:id/data?page=1&pageSize=100
  */
-export const getFileContent = async (req: Request, res: Response) => {
+export const getFileData = async (req: Request, res: Response) => {
     try {
-        console.log('🔥 这里的代码被执行了吗？ID是:', req.params.id);
-        // req.params 是 Request Parameters（请求参数）
-        // 前端发起请求的时候，类似于http://localhost:3000/api/files/content/65a1b2c...
-        // “id”是router.get('/content/:id', getFileContent);中定义的
-        // 其告诉框架：“嘿，content/ 后面跟着的那一串东西，不是固定的路径，而是一个变量（占位符）。”
-        const { id } = req.params; 
+        const { id } = req.params;
+        // 获取分页参数，默认为第一页，每页 100 条
+        const page = parseInt(req.query.page as string) || 1;
+        const pageSize = parseInt(req.query.pageSize as string) || 100;
+
+        // 1. 检查文件是否存在
         const fileNode = await FileNode.findById(id);
-
         if (!fileNode) {
-            return res.status(404).json({ code: 404, message: '文件记录不存在' });
+            return res.status(404).json({ code: 404, message: '文件不存在' });
         }
 
-        // 先检查 path 是否存在
-        // 如果是文件夹类型，或者数据异常，path 可能为空
-        if (!fileNode.path) {
-            return res.status(400).json({ code: 400, message: '文件路径不存在，无法读取' });
-        }
+        // 2. 查询 MongoDB Feature 集合
+        // 使用 skip + limit 实现分页
+        const skip = (page - 1) * pageSize;
 
-        // 使用绝对路径 (解决 Windows 下路径拼接问题)
-        // 数据库存的是 relative path (uploads/xx.json)，读取时要转为 absolute path
-        // path.resolve会把参数里的路径片段拼起来，并确保生成一个绝对路径
-        const absolutePath = path.resolve(process.cwd(), fileNode.path);
+        // 并行查询：总数 + 当前页数据
+        // Promise.all([...]) (并行执行)
+        // 加上 Promise.all，A 和 B 同时开始查询，
+        // 时间取决于最慢的那个（max(A, B)），大大缩短了响应时间。
+        const [total, features] = await Promise.all([
+            Feature.countDocuments({ fileId: id }),
+            Feature.find({ fileId: id })
+                   .select('type geometry properties') // 只取需要的字段
+                    //    .skip(skip).limit(pageSize): 
+                    // 告诉 MongoDB 只返回这一页的数据，防止一次性返回几万条数据把内存撑爆。
+                   .skip(skip)
+                   .limit(pageSize)
+                   .lean() // 返回纯 JS 对象，性能更好
+        ]);
 
-        // 将 readFileSync 改为异步 await readFile，并增加文件丢失的捕获
-        try {
-            // readAndParseFile 现在支持自动寻找 .dbf
-            const { data } = await readAndParseFile(absolutePath, fileNode.extension);
-            res.status(200).json({ code: 200, data: data });
-        } catch (readError: any) {
-            if (readError.message && readError.message.includes('物理文件')) {
-                return res.status(404).json({ code: 404, message: '物理文件丢失或不完整' });
+        // 3. 构造 GeoJSON 返回
+        // 即使分页，也保持 GeoJSON 结构，方便前端使用
+        const result = {
+            type: 'FeatureCollection',
+            features: features,
+            pagination: {
+                total,
+                page,
+                pageSize,
+                // Math.ceil（向上取整）
+                totalPages: Math.ceil(total / pageSize)
             }
-            throw readError;
-        }
+        };
+
+        res.status(200).json({
+            code: 200,
+            message: '获取数据成功',
+            data: result
+        });
+
     } catch (error: any) {
-        console.error('获取内容失败:', error);
+        console.error('分页获取数据失败:', error);
         res.status(500).json({ code: 500, message: error.message });
     }
 };
@@ -903,6 +994,7 @@ export const renameNode = async (req: Request, res: Response) => {
 /**
  * 删除节点 控制器
  * DELETE /api/files/:id
+ * ✅修改：同步删除Feature表里的成千上万条数据
  */
 export const deleteNode = async (req: Request, res: Response) => {
     try {
@@ -913,10 +1005,16 @@ export const deleteNode = async (req: Request, res: Response) => {
         const deleteRecursive = async (pid: string) => {
             const children = await FileNode.find({ parentId: pid });
             for (const child of children) {
-                if (child.type === 'folder') await deleteRecursive(child._id.toString());
-                else await deletePhysicalFiles(child.path);
-
-                // 删除数据库记录
+                if (child.type === 'folder') {
+                    await deleteRecursive(child._id.toString());
+                } else {
+                    // 删除物理文件 (保持不变)
+                    await deletePhysicalFiles(child.path);
+                    
+                    // ✅【新增】删除 MongoDB 中的关联要素数据（features集合中）
+                    await Feature.deleteMany({ fileId: child._id });
+                }
+                // 删除节点在数据库的记录（filenodes集合中）
                 await FileNode.findByIdAndDelete(child._id);
             }
         };
@@ -943,9 +1041,11 @@ export const deleteNode = async (req: Request, res: Response) => {
             await deleteRecursive(node._id.toString());
         } else {
             await deletePhysicalFiles(node.path);
+            // ✅【新增】如果是文件，删除其对应的 Feature 数据（features集合中）
+            await Feature.deleteMany({ fileId: node._id });
         }
 
-        // 删除节点本身
+        // 删除节点本身(filenodes集合中)
         await FileNode.findByIdAndDelete(id);
         res.status(200).json({ code: 200, message: '删除成功' });
     } catch (error: any) {
@@ -1073,80 +1173,107 @@ export const updateFileData = async (req: Request, res: Response) => {
 
     console.log(`[Update] 收到更新请求 - 文件ID: ${fileId}, 记录ID: ${recordId}`);
 
-    // 1. 数据库校验
-    const dbNode = await FileNode.findById(fileId);
-    if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+    // ✅更新features集合的值
+    const updateFields: Record<string, any> = {};
+    Object.keys(data).forEach(key => {
+        updateFields[`properties.${key}`] = data[key];
+    });
 
-    let fileNode = dbNode;
-    if (fileNode.type === 'folder' || !fileNode.path) {
-      return res.status(400).json({ code: 400, message: '无法编辑文件夹，请选择具体文件/文件路径不存在' });
-    }
-    // process.cwd()是终端输入命令的那个文件夹路径
-    const absolutePath = path.resolve(process.cwd(), fileNode.path);
-    // 读取并解析文件
-    const { type, data: fileData } = await readAndParseFile(absolutePath, fileNode.extension);
+    // 同时更新 updatedAt
+    // updateFields['updatedAt'] = new Date(); // 如果 Feature Schema 启用了 timestamps
 
-    // 2. 情况A: GeoJSON (FeatureCollection)
-    if (type === 'json' && fileData.type === 'FeatureCollection' && Array.isArray(fileData.features)) {
-        // 使用 == (弱等于) 进行比较
-        // 防止前端传的是 string "3207"，而文件里存的是 number 3207，导致找不到
-        const targetIndex = fileData.features.findIndex((f: any) => 
-            f.properties?.id == recordId || f.id == recordId
-        );
+    const result = await Feature.findOneAndUpdate(
+        { 
+            fileId: fileId, 
+            'properties.id': recordId // 匹配条件
+        },
+        { $set: updateFields }, // 局部更新
+        { new: true } // 返回更新后的文档
+    );
 
-        if (targetIndex === -1) {
-             console.warn(`[Update] 未找到记录。请求ID: ${recordId} (类型: ${typeof recordId})`);
-             return res.status(404).json({ code: 404, message: `未找到指定 ID 的行数据 (ID: ${recordId})` });
-        }
-
-        const targetFeature = fileData.features[targetIndex];
-        
-        // 更新属性 (保留原有的 geometry 和其他未修改的属性)
-        // 更新的逻辑：对象展开运算符 (...) 有一个非常重要的特性：“后来居上”（Last One Wins）
-        // 当你在一个新对象里展开多个对象时，如果出现了相同的 key（键名），写在后面的会覆盖写在前面的。
-        targetFeature.properties = { ...targetFeature.properties, ...data };
-        
-        // 清理 DataPivot 前端组件临时添加的辅助字段，防止写入文件
-        ['cp', '_cp', '_geometry', '_lng', '_lat', '_geom_coords'].forEach(k => delete targetFeature.properties[k]);
-
-        // 智能保存 (处理 CSV 和 SHP 的写回逻辑)
-        fileNode = await saveDataSmart(fileNode, fileData);
-        
-        // 更新数据库的时间戳
-        // 告诉 MongoosefileNode 这个对象里的 updatedAt（更新时间）字段已经被修改了
-        // 要不然数据库有时候觉得属性没变，它为了省事，根本不会向数据库发送保存请求
-        fileNode.markModified('updatedAt'); 
-        await fileNode.save(); 
-
-        return res.status(200).json({ code: 200, message: '保存成功', data: { updatedAt: fileNode.updatedAt } });
-    } 
-
-    // 3. 情况B: 普通数组 (纯 JSON 数组 或 CSV 解析后的结果)
-    if (type === 'json' && Array.isArray(fileData)) {
-        // 同样使用弱等于
-        const targetIndex = fileData.findIndex((row: any) => row.id == recordId);
-
-        if (targetIndex === -1) {
-             console.warn(`[Update] 未找到记录。请求ID: ${recordId}`);
-             return res.status(404).json({ code: 404, message: `未找到指定 ID 的行数据 (ID: ${recordId})` });
-        }
-        
-        // 更新数据
-        fileData[targetIndex] = { ...fileData[targetIndex], ...data };
-        
-        // 保存
-        fileNode = await saveDataSmart(fileNode, fileData);
-        // 告诉 MongoosefileNode 这个对象里的 updatedAt（更新时间）字段已经被修改了
-        // 要不然数据库有时候觉得属性没变，它为了省事，根本不会向数据库发送保存请求
-        fileNode.markModified('updatedAt'); 
-        await fileNode.save();
-        
-        return res.status(200).json({ code: 200, message: '保存成功', data: { updatedAt: fileNode.updatedAt } });
+    if (!result) {
+        return res.status(404).json({ code: 404, message: '未找到指定记录' });
     }
 
-    // 4. 其他情况
-    return res.status(400).json({ code: 400, message: '不支持的文件结构 (仅支持 GeoJSON 或 Array)' });
+    // ✅异步同步修改硬盘文件（建议在需要保存csv的时候再使用）
+    // // 1. 数据库校验
+    // const dbNode = await FileNode.findById(fileId);
+    // if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
 
+    // let fileNode = dbNode;
+    // if (fileNode.type === 'folder' || !fileNode.path) {
+    //   return res.status(400).json({ code: 400, message: '无法编辑文件夹，请选择具体文件/文件路径不存在' });
+    // }
+    // // process.cwd()是终端输入命令的那个文件夹路径
+    // const absolutePath = path.resolve(process.cwd(), fileNode.path);
+    // // 读取并解析文件
+    // const { type, data: fileData } = await readAndParseFile(absolutePath, fileNode.extension);
+
+    // // 2. 情况A: GeoJSON (FeatureCollection)
+    // if (type === 'json' && fileData.type === 'FeatureCollection' && Array.isArray(fileData.features)) {
+    //     // 使用 == (弱等于) 进行比较
+    //     // 防止前端传的是 string "3207"，而文件里存的是 number 3207，导致找不到
+    //     const targetIndex = fileData.features.findIndex((f: any) => 
+    //         f.properties?.id == recordId || f.id == recordId
+    //     );
+
+    //     if (targetIndex === -1) {
+    //          console.warn(`[Update] 未找到记录。请求ID: ${recordId} (类型: ${typeof recordId})`);
+    //          return res.status(404).json({ code: 404, message: `未找到指定 ID 的行数据 (ID: ${recordId})` });
+    //     }
+
+    //     const targetFeature = fileData.features[targetIndex];
+        
+    //     // 更新属性 (保留原有的 geometry 和其他未修改的属性)
+    //     // 更新的逻辑：对象展开运算符 (...) 有一个非常重要的特性：“后来居上”（Last One Wins）
+    //     // 当你在一个新对象里展开多个对象时，如果出现了相同的 key（键名），写在后面的会覆盖写在前面的。
+    //     targetFeature.properties = { ...targetFeature.properties, ...data };
+        
+    //     // 清理 DataPivot 前端组件临时添加的辅助字段，防止写入文件
+    //     ['cp', '_cp', '_geometry', '_lng', '_lat', '_geom_coords'].forEach(k => delete targetFeature.properties[k]);
+
+    //     // 智能保存 (处理 CSV 和 SHP 的写回逻辑)
+    //     fileNode = await saveDataSmart(fileNode, fileData);
+        
+    //     // 更新数据库的时间戳
+    //     // 告诉 MongoosefileNode 这个对象里的 updatedAt（更新时间）字段已经被修改了
+    //     // 要不然数据库有时候觉得属性没变，它为了省事，根本不会向数据库发送保存请求
+    //     fileNode.markModified('updatedAt'); 
+    //     await fileNode.save(); 
+
+    //     return res.status(200).json({ code: 200, message: '保存成功', data: { updatedAt: fileNode.updatedAt } });
+    // } 
+
+    // // 3. 情况B: 普通数组 (纯 JSON 数组 或 CSV 解析后的结果)
+    // if (type === 'json' && Array.isArray(fileData)) {
+    //     // 同样使用弱等于
+    //     const targetIndex = fileData.findIndex((row: any) => row.id == recordId);
+
+    //     if (targetIndex === -1) {
+    //          console.warn(`[Update] 未找到记录。请求ID: ${recordId}`);
+    //          return res.status(404).json({ code: 404, message: `未找到指定 ID 的行数据 (ID: ${recordId})` });
+    //     }
+        
+    //     // 更新数据
+    //     fileData[targetIndex] = { ...fileData[targetIndex], ...data };
+        
+    //     // 保存
+    //     fileNode = await saveDataSmart(fileNode, fileData);
+    //     // 告诉 MongoosefileNode 这个对象里的 updatedAt（更新时间）字段已经被修改了
+    //     // 要不然数据库有时候觉得属性没变，它为了省事，根本不会向数据库发送保存请求
+    //     fileNode.markModified('updatedAt'); 
+    //     await fileNode.save();
+        
+    //     return res.status(200).json({ code: 200, message: '保存成功', data: { updatedAt: fileNode.updatedAt } });
+    // }
+
+    // // 4. 其他情况
+    // return res.status(400).json({ code: 400, message: '不支持的文件结构 (仅支持 GeoJSON 或 Array)' });
+    return res.status(200).json({ 
+        code: 200, 
+        message: '保存成功', 
+        data: { updatedAt: new Date() } 
+    });
   } catch (error: any) {
     console.error('更新文件失败:', error);
     return res.status(500).json({ 
@@ -1162,48 +1289,80 @@ export const updateFileData = async (req: Request, res: Response) => {
 export const addRow = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
-        // 使用 const 接收 DB 查询结果，确保类型收窄
-        const dbNode = await FileNode.findById(id);
-        if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
-        let fileNode = dbNode;
+        // ✅直接在features集合里加一条新记录
+        // 1. 检查文件是否存在
+        const fileNode = await FileNode.findById(id);
+        if (!fileNode) return res.status(404).json({ code: 404, message: '文件不存在' });
 
-        if (!fileNode || !fileNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
-
-        const absolutePath = path.resolve(process.cwd(), fileNode.path);
-        
-        // 传入 fileNode.extension，告诉解析器这是个 json 文件
-        const { type, data } = await readAndParseFile(absolutePath, fileNode.extension);
-
-        if (type === 'json' && data.type === 'FeatureCollection') {
-            if (!Array.isArray(data.features)) {
-                data.features = [];
+        // 2. 构造新要素
+        // 自动生成一个唯一 ID，方便前端 React 渲染 list key
+        const newFeatureData = {
+            fileId: id, // ✅ 绑定外键
+            type: 'Feature',
+            geometry: null, // 新行默认没有地理坐标
+            properties: {
+                id: Date.now().toString(), // 生成时间戳 ID
+                name: 'New Feature' // 默认名称
             }
-            
-            const newFeature = {
-                type: 'Feature',
-                properties: {
-                    id: Date.now().toString(),
-                    name: 'New Feature'
-                },
-                geometry: null
-            };
-            data.features.push(newFeature);
-            // 使用saveDataSmart保存，我感觉主要是针对shp数据，如果有新增的行
-            // 这算作是数据修改了，那么会把shp转换成json保存在硬盘，进行修改保存
-            // 所以需要传一下fileNode参数（改变了路径）
-            // data是修改之后的新数据
-            fileNode = await saveDataSmart(fileNode, data);
-            
-            fileNode.markModified('updatedAt');
-            await fileNode.save();
+        };
 
-            res.status(200).json({ code: 200, message: '新增行成功', data: data }); 
-        } 
-        else if (type === 'csv') {
-            res.status(501).json({ code: 501, message: 'CSV 暂不支持增行' });
-        } else {
-            res.status(400).json({ code: 400, message: '只支持 GeoJSON 格式' });
-        }
+        // 3. 存入数据库
+        // 仅仅返回刚刚成功插入数据库的那这一行数据
+        const savedFeature = await Feature.create(newFeatureData);
+
+        // 4. 更新文件节点的修改时间 (updatedAt)
+        await FileNode.findByIdAndUpdate(id, { updatedAt: new Date() });
+
+        res.status(200).json({ 
+            code: 200, 
+            message: '新增行成功', 
+            data: savedFeature // 返回新生成的对象（带 _id）
+        });
+
+        // // ✅同步修改硬盘中的文件，等需要保存/下载csv的时候再使用
+        // // 使用 const 接收 DB 查询结果，确保类型收窄
+        // const dbNode = await FileNode.findById(id);
+        // if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+        // let fileNode = dbNode;
+
+        // if (!fileNode || !fileNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+
+        // const absolutePath = path.resolve(process.cwd(), fileNode.path);
+        
+        // // 传入 fileNode.extension，告诉解析器这是个 json 文件
+        // const { type, data } = await readAndParseFile(absolutePath, fileNode.extension);
+
+        // if (type === 'json' && data.type === 'FeatureCollection') {
+        //     if (!Array.isArray(data.features)) {
+        //         data.features = [];
+        //     }
+            
+        //     const newFeature = {
+        //         type: 'Feature',
+        //         properties: {
+        //             id: Date.now().toString(),
+        //             name: 'New Feature'
+        //         },
+        //         geometry: null
+        //     };
+        //     data.features.push(newFeature);
+        //     // 使用saveDataSmart保存，我感觉主要是针对shp数据，如果有新增的行
+        //     // 这算作是数据修改了，那么会把shp转换成json保存在硬盘，进行修改保存
+        //     // 所以需要传一下fileNode参数（改变了路径）
+        //     // data是修改之后的新数据
+        //     fileNode = await saveDataSmart(fileNode, data);
+            
+        //     fileNode.markModified('updatedAt');
+        //     await fileNode.save();
+
+        //     res.status(200).json({ code: 200, message: '新增行成功', data: data }); 
+        // } 
+        // else if (type === 'csv') {
+        //     res.status(501).json({ code: 501, message: 'CSV 暂不支持增行' });
+        // } else {
+        //     res.status(400).json({ code: 400, message: '只支持 GeoJSON 格式' });
+        // }
+
     } catch (error: any) {
         console.error('新增行失败:', error);
         res.status(500).json({ code: 500, message: error.message });
@@ -1218,55 +1377,78 @@ export const deleteRow = async (req: Request, res: Response) => {
         const { id } = req.params;
         const { recordId } = req.body;
 
-        // 1. 使用 const 接收 DB 查询结果，确保类型收窄
-        const dbNode = await FileNode.findById(id);
-        if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
-        let fileNode = dbNode;
+        // ✅在features集合中修改
+        // 1. 校验文件
+        const fileNode = await FileNode.findById(id);
+        if (!fileNode) return res.status(404).json({ code: 404, message: '文件不存在' });
 
-        if (!fileNode || !fileNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+        // 2. 数据库删除
+        // 逻辑：删除 fileId 为当前文件，且 properties.id 等于 recordId 的那条记录
+        const result = await Feature.deleteOne({ 
+            fileId: id, 
+            'properties.id': recordId 
+        });
 
-        const absolutePath = path.resolve(process.cwd(), fileNode.path);
-        // 传入 extension
-        const { type, data } = await readAndParseFile(absolutePath, fileNode.extension);
-
-        if (type === 'json' && data.type === 'FeatureCollection' && Array.isArray(data.features)) {
-            const targetIndex = data.features.findIndex((f: any) => 
-                f.properties?.id == recordId || f.id == recordId
-            );
-
-            if (targetIndex === -1) {
-                console.warn(`[Update] 未找到记录。请求ID: ${recordId} (类型: ${typeof recordId})`);
-                return res.status(404).json({ code: 404, message: `未找到指定 ID 的行数据 (ID: ${recordId})` });
-            }
-
-            data.features.splice(targetIndex, 1);
-            fileNode = await saveDataSmart(fileNode, data);
-            
-            fileNode.markModified('updatedAt');
-            await fileNode.save();
-            
-            res.status(200).json({ code: 200, message: '删除行成功' });
-
-        } else if (type === 'json' && Array.isArray(data)) {
-            const targetIndex = data.findIndex((row: any) => row.id == recordId);
-            
-            if (targetIndex === -1) {
-                console.warn(`[Delete] 未找到记录 Array。请求ID: ${recordId}`);
-                return res.status(404).json({ code: 404, message: `未找到指定 ID 的行数据 (ID: ${recordId})` });
-            }
-
-            // 删除
-            data.splice(targetIndex, 1);
-            
-            // 保存
-            await saveDataSmart(fileNode, data);
-            fileNode = await saveDataSmart(fileNode, data);
-            await fileNode.save();
-            
-            return res.status(200).json({ code: 200, message: '删除行成功' });
-        }else {
-            res.status(400).json({ code: 400, message: '不支持的文件结构' });
+        if (result.deletedCount === 0) {
+            console.warn(`[Delete] 未找到记录。文件ID: ${id}, 记录ID: ${recordId}`);
+            return res.status(404).json({ code: 404, message: '未找到指定 ID 的行数据' });
         }
+
+        // 3. 更新时间戳
+        await FileNode.findByIdAndUpdate(id, { updatedAt: new Date() });
+
+        res.status(200).json({ code: 200, message: '删除行成功' });
+
+        // // ✅同步修改硬盘中的文件，等需要保存/下载csv的时候再使用
+        // // 1. 使用 const 接收 DB 查询结果，确保类型收窄
+        // const dbNode = await FileNode.findById(id);
+        // if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+        // let fileNode = dbNode;
+
+        // if (!fileNode || !fileNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+
+        // const absolutePath = path.resolve(process.cwd(), fileNode.path);
+        // // 传入 extension
+        // const { type, data } = await readAndParseFile(absolutePath, fileNode.extension);
+
+        // if (type === 'json' && data.type === 'FeatureCollection' && Array.isArray(data.features)) {
+        //     const targetIndex = data.features.findIndex((f: any) => 
+        //         f.properties?.id == recordId || f.id == recordId
+        //     );
+
+        //     if (targetIndex === -1) {
+        //         console.warn(`[Update] 未找到记录。请求ID: ${recordId} (类型: ${typeof recordId})`);
+        //         return res.status(404).json({ code: 404, message: `未找到指定 ID 的行数据 (ID: ${recordId})` });
+        //     }
+
+        //     data.features.splice(targetIndex, 1);
+        //     fileNode = await saveDataSmart(fileNode, data);
+            
+        //     fileNode.markModified('updatedAt');
+        //     await fileNode.save();
+            
+        //     res.status(200).json({ code: 200, message: '删除行成功' });
+
+        // } else if (type === 'json' && Array.isArray(data)) {
+        //     const targetIndex = data.findIndex((row: any) => row.id == recordId);
+            
+        //     if (targetIndex === -1) {
+        //         console.warn(`[Delete] 未找到记录 Array。请求ID: ${recordId}`);
+        //         return res.status(404).json({ code: 404, message: `未找到指定 ID 的行数据 (ID: ${recordId})` });
+        //     }
+
+        //     // 删除
+        //     data.splice(targetIndex, 1);
+            
+        //     // 保存
+        //     await saveDataSmart(fileNode, data);
+        //     fileNode = await saveDataSmart(fileNode, data);
+        //     await fileNode.save();
+            
+        //     return res.status(200).json({ code: 200, message: '删除行成功' });
+        // }else {
+        //     res.status(400).json({ code: 400, message: '不支持的文件结构' });
+        // }
     } catch (error: any) {
         console.error('删除行失败:', error);
         res.status(500).json({ code: 500, message: error.message });
@@ -1282,36 +1464,62 @@ export const addColumn = async (req: Request, res: Response) => {
         const { fieldName, defaultValue } = req.body;
         if (!fieldName) return res.status(400).json({ code: 400, message: '列名不能为空' });
 
-        // 1. 使用 const 接收 DB 查询结果，确保类型收窄
-        const dbNode = await FileNode.findById(id);
-        if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
-        let fileNode = dbNode;
+        const fileNode = await FileNode.findById(id);
+        if (!fileNode) return res.status(404).json({ code: 404, message: '文件不存在' });
 
-        if (!fileNode || !fileNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+        // 1. 批量更新
+        // 使用 $set 操作符。
+        // 为了防止覆盖已有数据，我们可以加一个查询条件：{ [`properties.${fieldName}`]: { $exists: false } }
+        // 只有当这个属性不存在时，才去设置它。
+        
+        const updateQuery = { [`properties.${fieldName}`]: defaultValue || '' };
+        
+        await Feature.updateMany(
+            { 
+                fileId: id,
+                [`properties.${fieldName}`]: { $exists: false } // 仅对不存在该字段的文档生效
+            },
+            { 
+                $set: updateQuery 
+            }
+        );
 
-        const absolutePath = path.resolve(process.cwd(), fileNode.path);
-        // 传入 extension
-        const { type, data } = await readAndParseFile(absolutePath, fileNode.extension);
+        // 2. 更新时间戳
+        await FileNode.findByIdAndUpdate(id, { updatedAt: new Date() });
 
-        if (type === 'json' && data.type === 'FeatureCollection' && Array.isArray(data.features)) {
-            data.features.forEach((feature: any) => {
-                if (!feature.properties) feature.properties = {};
+        res.status(200).json({ code: 200, message: '新增列成功' });
 
-                // Object.prototype.hasOwnProperty.call(feature.properties, fieldName)
-                // 意思是检查下feature.properties中有没有叫fieldName的一列
-                // 这是 JavaScript 中最安全的“检查属性是否存在”的写法
-                if (!Object.prototype.hasOwnProperty.call(feature.properties, fieldName)) {
-                    feature.properties[fieldName] = defaultValue || '';
-                }
-            });
-            fileNode = await saveDataSmart(fileNode, data);
-            fileNode.markModified('updatedAt');
-            await fileNode.save();
+        // // ✅同步修改硬盘中的文件，等需要保存/下载csv的时候再使用
+        // // 1. 使用 const 接收 DB 查询结果，确保类型收窄
+        // const dbNode = await FileNode.findById(id);
+        // if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+        // let fileNode = dbNode;
 
-            res.status(200).json({ code: 200, message: '新增列成功' });
-        } else {
-            res.status(400).json({ code: 400, message: '不支持的文件结构' });
-        }
+        // if (!fileNode || !fileNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+
+        // const absolutePath = path.resolve(process.cwd(), fileNode.path);
+        // // 传入 extension
+        // const { type, data } = await readAndParseFile(absolutePath, fileNode.extension);
+
+        // if (type === 'json' && data.type === 'FeatureCollection' && Array.isArray(data.features)) {
+        //     data.features.forEach((feature: any) => {
+        //         if (!feature.properties) feature.properties = {};
+
+        //         // Object.prototype.hasOwnProperty.call(feature.properties, fieldName)
+        //         // 意思是检查下feature.properties中有没有叫fieldName的一列
+        //         // 这是 JavaScript 中最安全的“检查属性是否存在”的写法
+        //         if (!Object.prototype.hasOwnProperty.call(feature.properties, fieldName)) {
+        //             feature.properties[fieldName] = defaultValue || '';
+        //         }
+        //     });
+        //     fileNode = await saveDataSmart(fileNode, data);
+        //     fileNode.markModified('updatedAt');
+        //     await fileNode.save();
+
+        //     res.status(200).json({ code: 200, message: '新增列成功' });
+        // } else {
+        //     res.status(400).json({ code: 400, message: '不支持的文件结构' });
+        // }
     } catch (error: any) {
         console.error('新增列失败:', error);
         res.status(500).json({ code: 500, message: error.message });
@@ -1327,37 +1535,55 @@ export const deleteColumn = async (req: Request, res: Response) => {
         const { fieldName } = req.body;
         const protectedFields = ['id', 'name', 'cp']; 
         if (protectedFields.includes(fieldName)) return res.status(400).json({ code: 400, message: '关键字段禁止删除' });
+        
+        const fileNode = await FileNode.findById(id);
+        if (!fileNode) return res.status(404).json({ code: 404, message: '文件不存在' });
 
-        // 1. 使用 const 接收 DB 查询结果，确保类型收窄
-        const dbNode = await FileNode.findById(id);
-        if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
-        let fileNode = dbNode;
+        // 1. 批量移除
+        // 使用 $unset 操作符。注意：值设为 "" 或 1 都可以，MongoDB 此时只看 key。
+        const unsetQuery = { [`properties.${fieldName}`]: "" };
 
-        if (!fileNode || !fileNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+        await Feature.updateMany(
+            { fileId: id },
+            { $unset: unsetQuery }
+        );
 
-        const absolutePath = path.resolve(process.cwd(), fileNode.path);
-        // 传入 extension
-        const { type, data } = await readAndParseFile(absolutePath, fileNode.extension);
+        // 2. 更新时间戳
+        await FileNode.findByIdAndUpdate(id, { updatedAt: new Date() });
 
-        if (type === 'json' && data.type === 'FeatureCollection' && Array.isArray(data.features)) {
-            data.features.forEach((feature: any) => {
-                if (feature.properties) {
-                    // 在 JavaScript 中，delete 操作符的作用是从对象中彻底移除这个属性
-                    // 是连根拔起，键（Key/字段名）和值（Value）一起删掉
+        res.status(200).json({ code: 200, message: '删除列成功' });
 
-                    // 并且不用判断是否存在fieldName这一列，因为不会报错
-                    // 因为delete 操作符尝试删除一个根本不存在的属性，它不会报错，而是直接返回 true（表示操作结束）
-                    delete feature.properties[fieldName];
-                }
-            });
-            fileNode = await saveDataSmart(fileNode, data);
-            fileNode.markModified('updatedAt');
-            await fileNode.save();
+        // // ✅同步修改硬盘中的文件，等需要保存/下载csv的时候再使用
+        // // 1. 使用 const 接收 DB 查询结果，确保类型收窄
+        // const dbNode = await FileNode.findById(id);
+        // if (!dbNode || !dbNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+        // let fileNode = dbNode;
 
-            res.status(200).json({ code: 200, message: '删除列成功' });
-        } else {
-            res.status(400).json({ code: 400, message: '不支持的文件结构' });
-        }
+        // if (!fileNode || !fileNode.path) return res.status(404).json({ code: 404, message: '文件不存在' });
+
+        // const absolutePath = path.resolve(process.cwd(), fileNode.path);
+        // // 传入 extension
+        // const { type, data } = await readAndParseFile(absolutePath, fileNode.extension);
+
+        // if (type === 'json' && data.type === 'FeatureCollection' && Array.isArray(data.features)) {
+        //     data.features.forEach((feature: any) => {
+        //         if (feature.properties) {
+        //             // 在 JavaScript 中，delete 操作符的作用是从对象中彻底移除这个属性
+        //             // 是连根拔起，键（Key/字段名）和值（Value）一起删掉
+
+        //             // 并且不用判断是否存在fieldName这一列，因为不会报错
+        //             // 因为delete 操作符尝试删除一个根本不存在的属性，它不会报错，而是直接返回 true（表示操作结束）
+        //             delete feature.properties[fieldName];
+        //         }
+        //     });
+        //     fileNode = await saveDataSmart(fileNode, data);
+        //     fileNode.markModified('updatedAt');
+        //     await fileNode.save();
+
+        //     res.status(200).json({ code: 200, message: '删除列成功' });
+        // } else {
+        //     res.status(400).json({ code: 400, message: '不支持的文件结构' });
+        // }
     } catch (error: any) {
         console.error('删除列失败:', error);
         res.status(500).json({ code: 500, message: error.message });

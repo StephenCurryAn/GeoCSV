@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { uploadFile, createFolder, getFileTree, getFileContent, 
+import { uploadFile, createFolder, getFileTree, getFileData,
         renameNode, deleteNode, updateFileData,
         addRow, deleteRow, addColumn, deleteColumn } from '../controllers/fileController';
 import upload from '../utils/uploadConfig';
@@ -49,8 +49,8 @@ router.get('/tree', getFileTree);
  * 用于前端点击文件时，通过 ID 获取文件内容 (按需加载)
  */
 // http://localhost:3000/api/files/content/65a1b2c3d4e5...
-router.get('/content/:id', getFileContent);
-
+// router.get('/content/:id', getFileContent); // （建议在需要保存csv的时候再使用）
+router.get('/:id/data', getFileData); // 分页读取路由
 // /content/:id 代表**“这个文件里面的具体内容”**（比如 GeoJSON 的那一大串坐标数据）。
 // /:id 代表**“这个文件本身”**（通常指文件的基本信息，如名字、大小、创建时间）。
 
