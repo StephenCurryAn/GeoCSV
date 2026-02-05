@@ -61,12 +61,12 @@ const featureSchema = new Schema<IFeature>({
 // 地理空间索引 (Geospatial Index)
 // 核心：创建 2dsphere 空间索引（最实用最常用最好的索引（曲面球体））
 // 这允许你执行 "查找我附近 5km 的点" 或 "查找屏幕矩形范围内的数据"
-featureSchema.index({ geometry: '2dsphere' });
+// featureSchema.index({ geometry: '2dsphere' });
 
-// 复合索引优化 (可选)
+// 复合索引优化 (可选)  
 // 如果你经常需要查询 "某个文件内的空间数据"，这个组合索引会非常快
 // 比如：只加载 id 为 xxx 的文件在当前地图视口内的数据
-featureSchema.index({ fileId: 1, geometry: '2dsphere' });
+// featureSchema.index({ fileId: 1, geometry: '2dsphere' });
 
 const Feature = mongoose.model<IFeature>('Feature', featureSchema);
 

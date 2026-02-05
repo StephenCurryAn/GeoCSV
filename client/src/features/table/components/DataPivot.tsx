@@ -198,6 +198,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, pagination, onPag
       setColumnDefs(generateColumnDefs(rows));
     };
 
+    // 原始的processGeoJSON函数
     // const processGeoJSON = (geoData: any) => {
     //     if (geoData.type === 'FeatureCollection' && Array.isArray(geoData.features)) {
     //       const rows = geoData.features.map((feature: any) => {
@@ -247,14 +248,10 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, pagination, onPag
     //         console.warn('不是标准的 FeatureCollection GeoJSON');
     //     }
     //   };
-    // const processArrayData = (arr: any[]) => {
-    //     setRowData(arr);
-    //     // 使用提取出来的通用函数
-    //     setColumnDefs(generateColumnDefs(arr));
-    // }
 
-    // 导出 CSV 处理函数
-    
+    /**
+     * 导出 CSV 处理函数
+     */
     const handleExportCSV = () => {
     if (gridRef.current && gridRef.current.api) {
         // 使用 AG Grid 原生导出功能
@@ -428,7 +425,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, pagination, onPag
             rowData={rowData}
             columnDefs={columnDefs}
 
-            // ✅关闭 AG Grid 的全量分页，因为我们只给了它一页数据
+            // ✅关闭 AG Grid 的全量分页，因为只给了它一页数据
             pagination={false}
             // paginationPageSize={20}
 

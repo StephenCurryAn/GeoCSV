@@ -1,5 +1,12 @@
 import apiClient from './apiClient';
 
+// 定义后端统一的响应结构 (Wrapper)
+interface ApiResponse<T> {
+  code: number;
+  message: string;
+  data: T;
+}
+
 // ✅定义标记页数后端响应接口
 export interface PaginatedGeoResponse {
   type: 'FeatureCollection';
@@ -158,13 +165,13 @@ class GeoService {
    */
   async getFileData(id: string, page = 1, pageSize = 20): Promise<PaginatedGeoResponse> {
     // 对应后端路由: GET /api/files/:id/data?page=1&pageSize=20
-    const response = await apiClient.get<PaginatedGeoResponse>(`/files/${id}/data`, {
+    const res = await apiClient.get<ApiResponse<PaginatedGeoResponse>>(`/files/${id}/data`, {
       params: { page, pageSize }
     });
     // 注意：apiClient 拦截器通常已经处理了 response.data，
     // 如果你的 apiClient 依然返回 axios 原始对象，请使用 response.data.data
     // 这里假设 apiClient 已经解包，直接返回后端 json 中的 data 字段
-    return response.data as any; 
+    return res.data.data; 
   }
 
   /**
@@ -172,7 +179,7 @@ class GeoService {
    * @param files 文件列表
    * @param parentId 父文件夹ID
    */
-  async uploadFile(files: File[], parentId: string | null = null): Promise<UploadResponse> {
+  async uploadFile(files: FileList | File[], parentId: string | null = null): Promise<UploadResponse> {
     const formData = new FormData();
     // 兼容 FileList 和 Array
     if (files instanceof FileList) {
@@ -251,7 +258,7 @@ class GeoService {
    */
   async updateFileData(fileId: string, recordId: number | string, data: any): Promise<any> {
     // 对应后端路由: PUT /api/files/:id/update
-    const response = await apiClient.put(`/files/${fileId}/update`, {
+    const response = await apiClient.post(`/files/${fileId}/update`, {
       recordId,
       data
     });

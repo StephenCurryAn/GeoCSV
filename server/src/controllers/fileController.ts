@@ -620,6 +620,26 @@ export const uploadFile = async (req: Request, res: Response) => {
             }
         }
 
+        // 处理数据库文件名冲突 (自动重命名)
+        // 如果数据库里已经有了 "data.csv"，我们自动改成 "data(1).csv"
+        let dbFileName = mainOriginalName || customName  ;
+        let counter = 1;
+        // 循环检查是否存在同名文件
+        while (true) {
+            const existing = await FileNode.findOne({ 
+                name: dbFileName, 
+                parentId: parentId, 
+                type: 'file' 
+            });
+            if (!existing) break; // 没有重名，跳出循环
+
+            // 有重名，构造新名字
+            const ext = path.extname(mainOriginalName); // .csv
+            const nameNoExt = path.basename(mainOriginalName, ext); // data
+            dbFileName = `${nameNoExt}(${counter})${ext}`; // data(1).csv
+            counter++;
+        }
+
         // 在数据库中创建文件节点记录
         const fileNode = new FileNode({
             name: mainOriginalName,      // 文件名
@@ -643,12 +663,23 @@ export const uploadFile = async (req: Request, res: Response) => {
                 console.log(`[Database] 正在将 ${parsedData.features.length} 个要素写入 MongoDB...`);
                 
                 // 构造要插入的文档数组
-                const featuresToInsert = parsedData.features.map((f: any) => ({
-                    fileId: savedFileNode._id, // 关联外键
-                    type: 'Feature',
-                    geometry: f.geometry,
-                    properties: f.properties
-                }));
+                const featuresToInsert = parsedData.features.map((f: any) => {
+                    // 构造基础对象
+                    const featureDoc: any = {
+                        fileId: savedFileNode._id,
+                        type: 'Feature',
+                        properties: f.properties
+                    };
+                    
+                    // 只有当 geometry 是有效对象且不是 null 时才添加该字段
+                    // 如果 geometry 为 null，我们直接不把这个 key 放进去
+                    // MongoDB 的 2dsphere 索引会忽略没有该字段的文档，从而避免报错
+                    if (f.geometry && typeof f.geometry === 'object') {
+                        featureDoc.geometry = f.geometry;
+                    }
+
+                    return featureDoc;
+                });
 
                 // 批量插入 (使用 ordered: false 提高性能，即使某一条失败也不阻塞其他)
                 await Feature.insertMany(featuresToInsert, { ordered: false });
@@ -1053,110 +1084,110 @@ export const deleteNode = async (req: Request, res: Response) => {
     }
 };
 
-/**
- * 函数作用：将 GeoJSON 转换为 CSV 字符串
- * 用于将修改后的数据写回 CSV 文件
- */
-function geoJSONToCSV(geoJSON: any): string {
-    if (!geoJSON || !Array.isArray(geoJSON.features)) return '';
+// /**
+//  * 函数作用：将 GeoJSON 转换为 CSV 字符串
+//  * 用于将修改后的数据写回 CSV 文件
+//  */
+// function geoJSONToCSV(geoJSON: any): string {
+//     if (!geoJSON || !Array.isArray(geoJSON.features)) return '';
 
-    // 将 FeatureCollection 扁平化为数组
-    const flatData = geoJSON.features.map((feature: any) => {
-        // 1. 获取所有属性
-        const row = { ...feature.properties };
+//     // 将 FeatureCollection 扁平化为数组
+//     const flatData = geoJSON.features.map((feature: any) => {
+//         // 1. 获取所有属性
+//         const row = { ...feature.properties };
         
-        // 移除内部字段 (如 __csv_id)
-        // Object.keys()是“把这个对象所有的‘键名’（属性名）提取出来，变成一个数组给我。”
-        // Object是JavaScript 语言内置的全局对象
-        Object.keys(row).forEach(k => {
-            if (k.startsWith('__')) delete row[k];
-        });
+//         // 移除内部字段 (如 __csv_id)
+//         // Object.keys()是“把这个对象所有的‘键名’（属性名）提取出来，变成一个数组给我。”
+//         // Object是JavaScript 语言内置的全局对象
+//         Object.keys(row).forEach(k => {
+//             if (k.startsWith('__')) delete row[k];
+//         });
 
-        // 2. 处理几何信息
-        if (feature.geometry) {
-            if (feature.geometry.type === 'Point' && Array.isArray(feature.geometry.coordinates)) {
-                // 如果是点，确保有经纬度列
-                // 优先使用原有的 lat/lon 字段名，如果没有则新建
-                if (!row.lng && !row.longitude && !row.x) row.lng = feature.geometry.coordinates[0];
-                if (!row.lat && !row.latitude && !row.y) row.lat = feature.geometry.coordinates[1];
-            } else {
-                // 如果是面/线，将坐标存入 geometry 列
-                // 这里我们统一用 "geometry" 作为列名
-                row['geometry'] = JSON.stringify(feature.geometry.coordinates);
-            }
-        }
-        return row;
-    });
+//         // 2. 处理几何信息
+//         if (feature.geometry) {
+//             if (feature.geometry.type === 'Point' && Array.isArray(feature.geometry.coordinates)) {
+//                 // 如果是点，确保有经纬度列
+//                 // 优先使用原有的 lat/lon 字段名，如果没有则新建
+//                 if (!row.lng && !row.longitude && !row.x) row.lng = feature.geometry.coordinates[0];
+//                 if (!row.lat && !row.latitude && !row.y) row.lat = feature.geometry.coordinates[1];
+//             } else {
+//                 // 如果是面/线，将坐标存入 geometry 列
+//                 // 这里我们统一用 "geometry" 作为列名
+//                 row['geometry'] = JSON.stringify(feature.geometry.coordinates);
+//             }
+//         }
+//         return row;
+//     });
 
-    // 使用 PapaParse 反向解析为 CSV 字符串
-    return Papa.unparse(flatData);
-}
+//     // 使用 PapaParse 反向解析为 CSV 字符串
+//     return Papa.unparse(flatData);
+// }
 
-/**
- * 函数作用：智能保存，根据文件类型决定保存策略
- * 并同步更新数据库中的文件大小 (size)
- * 用到了geoJSONToCSV函数
- */
-const saveDataSmart = async (fileNode: any, geoJsonData: any) => {
-    const absolutePath = path.resolve(process.cwd(), fileNode.path);
-    const ext = fileNode.extension.toLowerCase();
+// /**
+//  * 函数作用：智能保存，根据文件类型决定保存策略
+//  * 并同步更新数据库中的文件大小 (size)
+//  * 用到了geoJSONToCSV函数
+//  */
+// const saveDataSmart = async (fileNode: any, geoJsonData: any) => {
+//     const absolutePath = path.resolve(process.cwd(), fileNode.path);
+//     const ext = fileNode.extension.toLowerCase();
     
-    // 定义一个变量来存最终的文件路径，用于计算大小
-    let finalPath = absolutePath;
+//     // 定义一个变量来存最终的文件路径，用于计算大小
+//     let finalPath = absolutePath;
 
-    // 策略 A: CSV -> 转回 CSV 文本
-    if (ext === '.csv') {
-        const csvString = geoJSONToCSV(geoJsonData);
-        await fsPromises.writeFile(absolutePath, csvString, 'utf-8');
-        console.log(`💾 CSV 文件已更新: ${fileNode.name}`);
-    }
+//     // 策略 A: CSV -> 转回 CSV 文本
+//     if (ext === '.csv') {
+//         const csvString = geoJSONToCSV(geoJsonData);
+//         await fsPromises.writeFile(absolutePath, csvString, 'utf-8');
+//         console.log(`💾 CSV 文件已更新: ${fileNode.name}`);
+//     }
 
-    // 策略 B: SHP -> 迁移为 JSON
-    else if (ext === '.shp') {
-        console.log(`检测到 SHP 编辑，正在转换为 GeoJSON 以便保存...`);
+//     // 策略 B: SHP -> 迁移为 JSON
+//     else if (ext === '.shp') {
+//         console.log(`检测到 SHP 编辑，正在转换为 GeoJSON 以便保存...`);
         
-        // path.dirname()是从一个完整的文件路径中，剥离出它所在的“文件夹路径”（父目录）
-        const dir = path.dirname(absolutePath);
-        const basename = path.basename(absolutePath, '.shp'); 
-        const newFileName = `${basename}.json`;
-        const newPath = path.join(dir, newFileName);
+//         // path.dirname()是从一个完整的文件路径中，剥离出它所在的“文件夹路径”（父目录）
+//         const dir = path.dirname(absolutePath);
+//         const basename = path.basename(absolutePath, '.shp'); 
+//         const newFileName = `${basename}.json`;
+//         const newPath = path.join(dir, newFileName);
 
-        // 写入 JSON
-        await fsPromises.writeFile(newPath, JSON.stringify(geoJsonData, null, 2), 'utf-8');
+//         // 写入 JSON
+//         await fsPromises.writeFile(newPath, JSON.stringify(geoJsonData, null, 2), 'utf-8');
 
-        // 删除旧 SHP 文件
-        const extensions = ['.shp', '.shx', '.dbf', '.prj', '.cpg'];
-        for (const e of extensions) {
-            const oldFile = path.join(dir, `${basename}${e}`);
-            try { await fsPromises.unlink(oldFile); } catch(e) {}
-        }
+//         // 删除旧 SHP 文件
+//         const extensions = ['.shp', '.shx', '.dbf', '.prj', '.cpg'];
+//         for (const e of extensions) {
+//             const oldFile = path.join(dir, `${basename}${e}`);
+//             try { await fsPromises.unlink(oldFile); } catch(e) {}
+//         }
 
-        // 更新节点信息
-        // fileNode.path = path.relative(process.cwd(), newPath);
-        fileNode.path = newPath;
-        fileNode.extension = '.json';
-        fileNode.name = newFileName;
-        fileNode.mimeType = 'application/json';
+//         // 更新节点信息
+//         // fileNode.path = path.relative(process.cwd(), newPath);
+//         fileNode.path = newPath;
+//         fileNode.extension = '.json';
+//         fileNode.name = newFileName;
+//         fileNode.mimeType = 'application/json';
         
-        finalPath = newPath; // 更新最终路径
-        console.log(`SHP 已成功迁移为 JSON: ${newFileName}`);
-    }
+//         finalPath = newPath; // 更新最终路径
+//         console.log(`SHP 已成功迁移为 JSON: ${newFileName}`);
+//     }
 
-    // 策略 C: JSON -> 直接保存
-    else {
-        await fsPromises.writeFile(absolutePath, JSON.stringify(geoJsonData, null, 2), 'utf-8');
-    }
+//     // 策略 C: JSON -> 直接保存
+//     else {
+//         await fsPromises.writeFile(absolutePath, JSON.stringify(geoJsonData, null, 2), 'utf-8');
+//     }
 
-    // 重新计算文件大小并更新到数据库对象
-    try {
-        const stats = await fsPromises.stat(finalPath);
-        fileNode.size = stats.size; // 更新大小
-    } catch (e) {
-        console.warn('无法更新文件大小统计');
-    }
+//     // 重新计算文件大小并更新到数据库对象
+//     try {
+//         const stats = await fsPromises.stat(finalPath);
+//         fileNode.size = stats.size; // 更新大小
+//     } catch (e) {
+//         console.warn('无法更新文件大小统计');
+//     }
 
-    return fileNode;
-};
+//     return fileNode;
+// };
 
 /**
  * 更新文件 控制器
