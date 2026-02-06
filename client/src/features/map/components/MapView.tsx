@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { bbox, center } from '@turf/turf';
+import { bbox } from '@turf/turf';
 import { Select, ConfigProvider, theme, Space, Typography } from 'antd'; // 引入 Ant Design
 
 const { Option } = Select;
@@ -240,8 +240,9 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
                     }
                     if (!props.cp || !Array.isArray(props.cp)) {
                          try {
-                            const centerFeature = center(feature as any);
-                            props.cp = centerFeature.geometry.coordinates;
+                            // const centerFeature = center(feature as any);
+                            // props.cp = centerFeature.geometry.coordinates;
+                            props.cp = feature.properties?.cp;
                         } catch(err) { props.cp = [e.lngLat.lng, e.lngLat.lat]; }
                     }
                     if (onFeatureClick) onFeatureClick(props);

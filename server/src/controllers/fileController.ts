@@ -11,6 +11,7 @@ import vm from 'vm'; // 引入 Node.js 虚拟机模块，用于动态执行代�
 import Papa from 'papaparse';
 import iconv from 'iconv-lite';
 import jschardet from 'jschardet';
+import { center } from '@turf/turf';
 import FileNode from '../models/FileNode'; // 导入文件节点模型
 import Feature from '../models/Feature'; // 引入 Feature 模型
 
@@ -664,6 +665,29 @@ export const uploadFile = async (req: Request, res: Response) => {
                 
                 // 构造要插入的文档数组
                 const featuresToInsert = parsedData.features.map((f: any) => {
+                    
+                    // ✅在此处计算中心点
+                    if (f.geometry) {
+                        try {
+                            // 确保 properties 存在
+                            if (!f.properties) f.properties = {};
+
+                            // 1. 如果是点 (Point)，中心点就是它自己，直接取坐标，省去 turf 计算开销
+                            if (f.geometry.type === 'Point' && Array.isArray(f.geometry.coordinates)) {
+                                f.properties.cp = f.geometry.coordinates;
+                            } 
+                            // 2. 如果是 线/面 (Line/Polygon)，使用 turf.center 计算包围盒中心
+                            else {
+                                // turf.center 接收一个 Feature，返回一个 Point Feature
+                                const centerFeature = center(f);
+                                f.properties.cp = centerFeature.geometry.coordinates;
+                            }
+                        } catch (err) {
+                            console.warn('[Geometry] 中心点计算失败，跳过:', err);
+                            // 计算失败时不写入 center 字段，前端做好空值兼容即可
+                        }
+                    }
+                    
                     // 构造基础对象
                     const featureDoc: any = {
                         fileId: savedFileNode._id,

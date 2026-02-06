@@ -5,7 +5,7 @@ import { AgGridReact } from 'ag-grid-react';
 import { type ColDef, ModuleRegistry, AllCommunityModule } from 'ag-grid-community'; 
 import { Empty, Button, Space, Popconfirm, message, Pagination } from 'antd'; // ... 引入 antd 组件
 import { PlusOutlined, DeleteOutlined, TableOutlined, MinusSquareOutlined, DownloadOutlined } from '@ant-design/icons';
-import { center } from '@turf/turf'; // 引入 center 计算
+// import { center } from '@turf/turf'; // 引入 center 计算
 
 // 注册模块
 // 向 AG Grid 的全局系统注册‘社区版’的所有功能模块，以便表格能正常运行
@@ -119,7 +119,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, pagination, onPag
         // 自定义表头名称 (让显示更友好)
         headerName: (() => {
             if (key === '_geometry') return '图层类型';
-            if (key === 'cp') return '中心坐标';
+            if (key === 'center') return '中心坐标';
             if (key === '_lng') return '经度 (Lng)';
             if (key === '_lat') return '纬度 (Lat)';
             if (key === '_geom_coords') return '几何坐标数据 (Geometry)';
@@ -150,22 +150,24 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, pagination, onPag
     const processGeoJSONFeatures = (features: any[]) => {
         const rows = features.map((feature: any) => {
         
-        // ✅这段计算的代码，后续要移到后端
-        // 原有的提取 cp, geometry 逻辑保持不变
-        let cp = feature.properties?.cp;
+
+        // let cp = feature.properties?.cp;
+        // ✅移除 Turf 计算，直接读取后端算好的 cp
+        let cp = feature.properties?.cp
         // cp 解析逻辑
         // 如果 cp 是字符串 (CSV读取时常见)，尝试解析为数组
         if (typeof cp === 'string') {
             try { cp = JSON.parse(cp); } catch(e) {}
         }
+
         // 如果依然没有有效的 cp 且存在几何数据，使用 Turf.js 计算中心点
         // (需要确保头部引入了: import { center } from '@turf/turf';)
-        if ((!cp || !Array.isArray(cp)) && feature.geometry) {
-            try {
-                const c = center(feature);
-                cp = c.geometry.coordinates;
-            } catch(e) {}
-        }
+        // if ((!cp || !Array.isArray(cp)) && feature.geometry) {
+        //     try {
+        //         const c = center(feature);
+        //         cp = c.geometry.coordinates;
+        //     } catch(e) {}
+        // }
         
         // --- 2. 构造基础行数据 ---
         // 将 properties 扁平化，并添加辅助字段
