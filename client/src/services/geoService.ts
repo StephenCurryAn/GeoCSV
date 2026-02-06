@@ -308,6 +308,49 @@ class GeoService {
     return res.data;
   }
 
+  /**
+   * 导出文件
+   * @param fileId 文件ID
+   * @param fileName 文件名 (用于默认保存名称)
+   */
+  async exportFile(fileId: string, fileName: string): Promise<boolean> {
+    try {
+      // 1. 请求后端接口
+      // responseType: 'blob' 这里的关键，告诉 axios 返回的是二进制流
+      const response = await apiClient.get(`/files/${fileId}/export`, {
+        responseType: 'blob'
+      });
+
+      // 2. 创建 Blob 对象
+      const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8;' });
+
+      // 3. 创建临时下载链接
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      
+      // 设置下载文件名
+      // 如果文件名没有后缀，强制加上 .csv
+      const safeName = fileName.endsWith('.csv') ? fileName : `${fileName}.csv`;
+      link.setAttribute('download', safeName);
+      
+      // 4. 触发点击并清理
+      document.body.appendChild(link);
+      link.click();
+      
+      // 延时清理，确保下载触发
+      setTimeout(() => {
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+      }, 100);
+
+      return true;
+    } catch (error) {
+      console.error('导出文件失败:', error);
+      throw error;
+    }
+  }
+
 }
 
 // 导出 GeoService 实例，使其他模块可以直接使用

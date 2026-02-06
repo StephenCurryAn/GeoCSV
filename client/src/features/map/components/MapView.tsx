@@ -507,10 +507,19 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
             const displayId = selectedFeature.id || 'N/A';
 
             // 生成弹窗内容 HTML (过滤掉不想显示的内部字段)
-            const ignoreKeys = ['_geometry', '_geometry_type'];
+            // const ignoreKeys = ['_geometry', '_geometry_type'];
             const rowsHtml = Object.entries(selectedFeature)
                 // 过滤掉 id (因为我们在标题栏或置顶显示它)，过滤掉 geometry 相关
-                .filter(([key]) => key !== 'id' && !ignoreKeys.includes(key) && typeof key === 'string')
+                .filter(([key]) => {
+                    // 1. 不显示 id (因为标题栏有了)
+                    if (key === 'id') return false;
+                    // 2. ✅不显示任何以 _ 开头的临时字段
+                    if (key.startsWith('_')) return false;
+                    // 3. 不显示 cp (中心点坐标)
+                    if (key === 'cp') return false;
+                    
+                    return typeof key === 'string';
+                })
                 .map(([key, val]) => `
                     <div class="flex justify-between py-1 border-b border-gray-700 last:border-0">
                         <span class="text-gray-400 font-mono text-xs uppercase">${key}</span>

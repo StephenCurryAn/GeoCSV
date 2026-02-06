@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { uploadFile, createFolder, getFileTree, getFileData,
         renameNode, deleteNode, updateFileData,
-        addRow, deleteRow, addColumn, deleteColumn } from '../controllers/fileController';
+        addRow, deleteRow, addColumn, deleteColumn, exportFile } from '../controllers/fileController';
 import upload from '../utils/uploadConfig';
 
 /**
@@ -90,6 +90,12 @@ router.post('/:id/column', addColumn);
 // 4. 删除列
 router.post('/:id/column/delete', deleteColumn);
 
+/**
+ * GET /:id/export
+ * 导出/下载文件
+ * 从数据库读取最新数据并生成 CSV
+ */
+router.get('/:id/export', exportFile);
 
 // export default 的特权：在别的文件中引用的时候，可以随意起名（路径对就行）
 // (在index.ts里引用的时候起名为fileRoutes)

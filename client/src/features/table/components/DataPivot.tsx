@@ -3,9 +3,10 @@ import 'ag-grid-community/styles/ag-theme-alpine.css';
 import React, { useEffect, useState, useRef } from 'react';
 import { AgGridReact } from 'ag-grid-react'; 
 import { type ColDef, ModuleRegistry, AllCommunityModule } from 'ag-grid-community'; 
-import { Empty, Button, Space, Popconfirm, message, Pagination } from 'antd'; // ... 引入 antd 组件
+import { App, Empty, Button, Space, Popconfirm, Pagination } from 'antd'; // ... 引入 antd 组件
 import { PlusOutlined, DeleteOutlined, TableOutlined, MinusSquareOutlined, DownloadOutlined } from '@ant-design/icons';
 // import { center } from '@turf/turf'; // 引入 center 计算
+import { geoService } from '../../../services/geoService';
 
 // 注册模块
 // 向 AG Grid 的全局系统注册‘社区版’的所有功能模块，以便表格能正常运行
@@ -14,11 +15,13 @@ ModuleRegistry.registerModules([ AllCommunityModule ]);
 interface DataPivotProps {
     data: any;          
     fileName: string;   
+    // ✅ 新增 fileId，因为导出需要告诉后端是哪个文件
+    fileId?: string;
     // ✅ 新增分页 Props
     pagination?: {
-    total: number;
-    page: number;
-    pageSize: number;
+        total: number;
+        page: number;
+        pageSize: number;
     };
     onPageChange?: (page: number, pageSize: number) => void;
 
@@ -35,9 +38,12 @@ interface DataPivotProps {
     onDeleteColumn?: (fieldName: string) => void;
 }
 
-const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, pagination, onPageChange, 
+const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, pagination, onPageChange, 
     onRowClick, selectedFeature, onDataChange, 
     onAddRow, onDeleteRow, onAddColumn, onDeleteColumn }) => {
+    // ✅ 修改 2: 获取上下文感知的 message 实例
+    // 注意：MapView 必须被包裹在 <App> 组件中（通常在 main.tsx 或 App.tsx 已经包了）
+    const { message } = App.useApp();
     // Grid 引用，用于调用 API
     const gridRef = useRef<AgGridReact>(null);
     // 表格的行数据   
@@ -254,19 +260,24 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, pagination, onPag
     /**
      * 导出 CSV 处理函数
      */
-    const handleExportCSV = () => {
-    if (gridRef.current && gridRef.current.api) {
-        // 使用 AG Grid 原生导出功能
-        gridRef.current.api.exportDataAsCsv({
-            // 自定义文件名：原文件名_时间戳.csv
-            fileName: `${fileName || 'data'}_${Date.now()}.csv`,
-            // 仅导出可见列 (如果不想要隐藏列，设为 true)
-            allColumns: false, 
-        });
-        message.success('正在导出 CSV...');
-    } else {
-        message.error('表格未就绪，无法导出');
-    }
+    const handleExportCSV = async () => {
+        // 安全检查
+        if (!fileId) {
+            message.error('未找到文件 ID，无法进行服务器端导出');
+            return;
+        }
+
+        try {
+            message.loading({ content: '正在请求服务器生成最新数据...', key: 'exportMsg' });
+            
+            // 调用 Service 下载
+            await geoService.exportFile(fileId, fileName);
+            
+            message.success({ content: '导出成功，开始下载', key: 'exportMsg' });
+        } catch (error) {
+            console.error(error);
+            message.error({ content: '导出失败', key: 'exportMsg' });
+        }
     };
 
     if (!data || rowData.length === 0) {

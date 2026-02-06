@@ -279,7 +279,17 @@ function parseCsvToGeoJSON(csvString: string) {
                 if (typeof rawGeom === 'string') {
                     if (rawGeom.trim().startsWith('[') || rawGeom.trim().startsWith('{')) {
                         // 它把死板的文本字符串，变成活生生的 JavaScript 对象或数组。
-                        coordinates = JSON.parse(rawGeom);
+                        // coordinates = JSON.parse(rawGeom);
+                        // ✅智能识别坐标数组或完整 GeoJSON 对象
+                        const parsed = JSON.parse(rawGeom);
+                        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.type && parsed.coordinates) {
+                             // 如果是完整对象 {"type":"Polygon", "coordinates":...}
+                             geoType = parsed.type;
+                             coordinates = parsed.coordinates;
+                        } else {
+                             // 如果只是坐标数组 [[116, 32], ...]
+                             coordinates = parsed;
+                        }
                     } 
                 } else if (Array.isArray(rawGeom)) {
                     coordinates = rawGeom;
@@ -312,7 +322,7 @@ function parseCsvToGeoJSON(csvString: string) {
                 if (geoType.toLowerCase().includes('polygon')) geoType = 'Polygon';
                 if (geoType.toLowerCase().includes('line')) geoType = 'LineString';
                 if (geoType.toLowerCase().includes('point')) geoType = 'Point';
-            } else {
+            } else if(geoType === 'Unknown'){// ✅只有当类型未知时才进行推断 (防止覆盖上面解析出的正确类型)
                 if (Array.isArray(coordinates)) {
                     const depth = getArrayDepth(coordinates);
                     if (depth === 1) geoType = 'Point';
@@ -1228,10 +1238,17 @@ export const updateFileData = async (req: Request, res: Response) => {
 
     console.log(`[Update] 收到更新请求 - 文件ID: ${fileId}, 记录ID: ${recordId}`);
 
+    // ✅增加黑名单过滤
+    // 定义不需要存入数据库的临时字段列表
+    const ignoreFields = ['_geometry', '_geom_coords', '_lng', '_lat', '_cp'];
+
     // ✅更新features集合的值
     const updateFields: Record<string, any> = {};
     Object.keys(data).forEach(key => {
-        updateFields[`properties.${key}`] = data[key];
+        // 只有当 key 不在黑名单里时，才加入更新列表
+        if (!ignoreFields.includes(key)) {
+            updateFields[`properties.${key}`] = data[key];
+        }
     });
 
     // 同时更新 updatedAt
@@ -1642,5 +1659,89 @@ export const deleteColumn = async (req: Request, res: Response) => {
     } catch (error: any) {
         console.error('删除列失败:', error);
         res.status(500).json({ code: 500, message: error.message });
+    }
+};
+
+/**
+ * 辅助函数：将 MongoDB 的 Feature 文档转换为扁平对象 (用于 CSV)
+ */
+function flattenFeatureForCSV(feature: any) {
+    // 1. 提取属性
+    const row: any = { ...feature.properties };
+    
+    // 剔除内部字段 (如果有的话，比如 _id, fileId 等)
+    delete row._id;
+    delete row.id; // 如果想保留 id，这行去掉，或者重命名为 "SystemID"
+
+    // 2. 处理几何信息 (Geometry)
+    if (feature.geometry) {
+        if (feature.geometry.type === 'Point' && Array.isArray(feature.geometry.coordinates)) {
+            // 如果是点，拆分成经纬度列 (Excel 用户比较喜欢这样)
+            // 检查属性里是否已经有 lat/lon，没有则使用几何坐标填充
+            if (row.lng === undefined && row.longitude === undefined) {
+                row.lng = feature.geometry.coordinates[0];
+            }
+            if (row.lat === undefined && row.latitude === undefined) {
+                row.lat = feature.geometry.coordinates[1];
+            }
+        } else {
+            // 如果是线或面，通常把几何数据转为 WKT 字符串或者 GeoJSON 字符串存在一列里
+            // 这里简单处理：存为 GeoJSON 字符串
+            row.geometry = JSON.stringify(feature.geometry);
+        }
+    }
+    
+    // 3. 确保 id 在第一列 (可选优化)
+    // 这里的逻辑是创建一个新对象，先放 id，再放其他属性
+    const orderedRow: any = {};
+    if (feature.properties.id) orderedRow.id = feature.properties.id;
+    return { ...orderedRow, ...row };
+}
+
+/**
+ * 导出文件 (CSV) 控制器
+ * GET /api/files/:id/export
+ */
+export const exportFile = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+
+        // 1. 获取文件元数据
+        const fileNode = await FileNode.findById(id);
+        if (!fileNode) {
+            return res.status(404).json({ code: 404, message: '文件不存在' });
+        }
+
+        // 2. 从数据库拉取所有要素 (全量)
+        // 注意：如果数据量达到几十万条，这里可能需要使用 Stream (流式处理) 防止内存爆掉
+        // 目前假设数据量在万级，直接内存处理没问题
+        const features = await Feature.find({ fileId: id }).lean();
+
+        if (!features || features.length === 0) {
+            // 如果没有数据，返回一个空 CSV 或提示
+            return res.status(400).json({ code: 400, message: '该文件没有数据可导出' });
+        }
+
+        // 3. 转换为 CSV 格式数据
+        const flatData = features.map((f: any) => flattenFeatureForCSV(f));
+        
+        // 4. 生成 CSV 字符串
+        const csvString = Papa.unparse(flatData);
+
+        // 5. 添加 BOM 头 (Byte Order Mark)
+        // 这一步非常关键！如果不加 \uFEFF，Windows 的 Excel 打开中文 CSV 会乱码
+        const csvWithBOM = '\uFEFF' + csvString;
+
+        // 6. 设置响应头，告诉浏览器这是一个要下载的文件
+        const encodedFileName = encodeURIComponent(fileNode.name); // 处理文件名中文
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodedFileName}`);
+        
+        // 7. 发送
+        res.send(csvWithBOM);
+
+    } catch (error: any) {
+        console.error('导出文件失败:', error);
+        res.status(500).json({ code: 500, message: `导出失败: ${error.message}` });
     }
 };

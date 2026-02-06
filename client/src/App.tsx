@@ -186,7 +186,7 @@ function App() {
         };
         // 清理临时字段
         delete newFeature.properties._geometry;
-        delete newFeature.properties.cp;
+        // delete newFeature.properties.cp;
 
         // 更新 State
         const newFeatures = [...oldFeatures];
@@ -300,6 +300,7 @@ function App() {
           // ✅ data 这里只传 features 数组给表格显示  
           data={currentData?.features || []} 
           fileName={activeFileName} 
+          fileId={activeFileId}
           // ✅ 传入分页对象
           pagination={currentData?.pagination}
           // ✅ 传入翻页回调
