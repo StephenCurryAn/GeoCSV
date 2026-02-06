@@ -323,6 +323,8 @@ function App() {
           // data={uploadedFilesData[activeFileName]} 
           data={currentData ? { type: 'FeatureCollection', features: currentData.features } : null} 
           fileName={activeFileName}
+          // ✅必须把当前的 fileId 传给地图组件，否则它不知道去拉哪个文件的全量数据
+          fileId={activeFileId}
           // 传入选中的要素，用于高亮和弹窗
           selectedFeature={selectedFeature}
           // React 中最核心的父子组件通信模式，具体来说是子组件向父组件传递数据

@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { bbox } from '@turf/turf';
-import { Select, ConfigProvider, theme, Space, Typography } from 'antd'; // 引入 Ant Design
+import { App, Checkbox, Spin, Select, ConfigProvider, theme, Space, Typography } from 'antd'; // 引入 Ant Design
+import { geoService } from '../../../services/geoService';
 
 const { Option } = Select;
 const { Text } = Typography;
@@ -10,6 +11,7 @@ const { Text } = Typography;
 interface MapViewProps {
     data: any;        // GeoJSON 数据
     fileName: string; // 当前文件名
+    fileId?: string; // 当前选中的文件ID (必须要有这个才能去后台拉全量数据)
     selectedFeature?: any;
     onFeatureClick?: (feature: any) => void;
 }
@@ -80,7 +82,10 @@ const BASEMAPS = [
     }
 ];
 
-const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFeatureClick }) => {
+const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeature, onFeatureClick }) => {
+    // ✅ 修改 2: 获取上下文感知的 message 实例
+    // 注意：MapView 必须被包裹在 <App> 组件中（通常在 main.tsx 或 App.tsx 已经包了）
+    const { message } = App.useApp();
     const mapContainer = useRef<HTMLDivElement>(null);
     const mapInstance = useRef<maplibregl.Map | null>(null);
     const popupRef = useRef<maplibregl.Popup | null>(null);
@@ -93,6 +98,73 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
     const [activeScheme, setActiveScheme] = useState<string>('default'); // 当前颜色方案
     const [activeBasemap, setActiveBasemap] = useState<string>('dark'); // 当前底图
     
+    // ✅状态管理 - 全量数据相关
+    const [showAll, setShowAll] = useState(false);
+    const [allData, setAllData] = useState<any>(null);
+    const [loading, setLoading] = useState(false);
+
+    // ✅关键 - 决定当前地图渲染哪一份数据
+    // 如果勾选了 showAll 且有缓存数据，就用 allData，否则用父组件传来的分页 data
+    const displayData = (showAll && allData) ? allData : data;
+
+    // ✅使用 Ref 来始终追踪最新的 displayData
+    // Ref 可以穿透闭包，确保在事件监听器（如切换底图）中拿到的是这一刻应该显示的数据（全量），而不是旧数据
+    const displayDataRef = useRef(displayData);
+    // ✅每次组件渲染时，都更新 ref 的值为最新的 displayData
+    displayDataRef.current = displayData;
+
+    // ✅切换文件时的自动清理逻辑
+    useEffect(() => {
+        // 只要 fileId 变了，或者 fileName 变了，说明切文件了
+        // 立即重置勾选框，并清空内存中的 allData
+        if (showAll || allData) {
+            console.log('切换文件，自动释放旧文件的全量数据内存...');
+            setShowAll(false);
+            setAllData(null); // 立即释放内存
+        }
+    }, [fileId, fileName]); // 依赖项加上 fileName 双重保险
+
+    // ✅处理复选框点击事件
+    const handleShowAllChange = async (e: any) => {
+        const isChecked = e.target.checked;
+        
+        if (isChecked) {
+            // 勾选：去加载数据
+            if (!fileId) {
+                message.warning("无法获取文件ID，无法加载全量数据");
+                return;
+            }
+
+            // 如果已经有缓存，直接切状态，不请求
+            if (allData) {
+                setShowAll(true);
+                return;
+            }
+
+            setLoading(true);
+            try {
+                // 调用后端接口 (需要在 geoService 中实现 getAllFileData)
+                const resdata = await geoService.getAllFileData(fileId);
+                if (resdata) {
+                    setAllData(resdata); // 存入缓存
+                    setShowAll(true);     // 切换状态
+                    message.success(`全量数据加载完成: 共 ${resdata.pagination.total} 个要素`);
+                }
+            } catch (error) {
+                console.error(error);
+                message.error('加载全量数据失败');
+                setShowAll(false); 
+            } finally {
+                setLoading(false);
+            }
+        } else {
+            // 🚫 取消勾选：立即释放内存！
+            console.log('用户取消勾选，释放全量数据内存...');
+            setShowAll(false);
+            setAllData(null); // 设置为 null，垃圾回收会介入
+        }
+    };
+
     // 初始化地图
     useEffect(() => {
         if (mapInstance.current) return;
@@ -129,10 +201,10 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
         };
     }, []);
 
-    // 数据处理：提取数值字段 (当 data 变化时)
+    // ✅数据处理：提取数值字段 (当 data 变化时)，改为依赖 displayData
     useEffect(() => {
-        if (data && data.features && data.features.length > 0) {
-            const firstProps = data.features[0].properties;
+        if (displayData && displayData.features && displayData.features.length > 0) {
+            const firstProps = displayData.features[0].properties;
             // Object.keys（）处理被解析过的 JavaScript 对象
             const fields = Object.keys(firstProps).filter(key => {
                 const val = firstProps[key];
@@ -144,7 +216,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
         } else {
             setNumericFields([]);
         }
-    }, [data]);
+    }, [displayData]);
 
     /**
      * 核心渲染逻辑：只负责 Geometry 和基础图层架构
@@ -258,7 +330,9 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
      */
     const updateChoroplethColors = () => {
         const map = mapInstance.current;
-        if (!map || !map.getLayer('geo-fill-layer') || !data) return;
+        const currentDisplayData = displayDataRef.current;
+        // ✅这里也改为使用 displayData
+        if (!map || !map.getLayer('geo-fill-layer') || !currentDisplayData) return;
 
         // 1. 如果没有选字段，恢复默认颜色
         if (!activeField || activeField === 'none') {
@@ -274,7 +348,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
         // 3. 计算极值 (Min/Max)
         let min = Infinity;
         let max = -Infinity;
-        data.features.forEach((f: any) => {
+        currentDisplayData.features.forEach((f: any) => {
             const val = f.properties[activeField];
             if (typeof val === 'number') {
                 if (val < min) min = val;
@@ -305,16 +379,16 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
         console.log(`🎨 颜色映射更新: Field=${activeField}, Range=[${min}, ${max}]`);
     };
 
-    // 监听数据变化，渲染图层
+    // ✅监听数据变化，渲染图层
     useEffect(() => {
-        if (isMapLoaded && data) {
+        if (isMapLoaded && displayData) {
             // 渲染几何图形
-            renderGeoJSON(data);
+            renderGeoJSON(displayData);
             // 渲染后立即应用一次颜色（如果已有选中的字段）
             updateChoroplethColors();
             console.log('数据渲染完成')
         }
-    }, [data, isMapLoaded]);
+    }, [displayData, isMapLoaded]);
 
     // 监听可视化配置变化（字段、配色），只更新 Paint Property，不重绘 Geometry
     useEffect(() => {
@@ -336,9 +410,10 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
                 // 立即更新 Ref，防止后续的 styledata 事件重复打印
                 prevBasemapRef.current = activeBasemap;
             }
-
+            // ✅这里全部改成使用 displayDataRef.current
+            const currentData = displayDataRef.current;
             // 只有当地图样式完全加载，且我们需要的数据存在时才执行
-            if (map.getStyle() && data) {
+            if (map.getStyle() && currentData) {
                 // console.log('地图样式完全加载，重新渲染');
                 
                 // 核心判断：如果数据源不见了（说明刚切换了底图），则重新渲染
@@ -347,7 +422,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
                     
                     // 加上 try-catch 防止极少数情况下的竞态错误
                     try {
-                        renderGeoJSON(data);
+                        renderGeoJSON(currentData);
                         // 稍微延迟一点点应用颜色，确保图层已经注册到 map 中
                         setTimeout(() => {
                             updateChoroplethColors();
@@ -365,7 +440,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
             map.off('styledata', onStyleData);
         };
     // 这里加入 activeBasemap 依赖，是为了确保 renderGeoJSON 内部取到的边框颜色是基于新底图的
-    }, [data, activeBasemap, activeField, activeScheme]);
+    }, [activeBasemap, activeField, activeScheme]);
 
     // handleBasemapChange只需要负责两件事：更新 React 状态、告诉地图切换样式
     // basemapKey 是从 UI 界面上的下拉菜单（Select 组件）传过来的
@@ -477,6 +552,14 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
 
     return (
         <div className="w-full h-full relative">
+            {/* ✅加载遮罩层 - 当请求全量数据时显示 */}
+            {loading && (
+                <div className="absolute inset-0 bg-black/60 z-50 flex flex-col items-center justify-center backdrop-blur-sm">
+                    <Spin size="large" />
+                    <span className="text-cyan-400 mt-3 font-mono">正在加载全量数据...</span>
+                </div>
+            )}
+
             {/* 地图容器 */}
             <div ref={mapContainer} className="w-full h-full" />
 
@@ -497,11 +580,24 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, selectedFeature, onFe
                     {/* 面板容器 */}
                     <div className="bg-gray-900/90 backdrop-blur-md border border-cyan-500/30 p-4 rounded-lg shadow-[0_0_15px_rgba(0,0,0,0.5)] w-64">
                         
-                        <div className="mb-4 border-b border-gray-700 pb-2">
+                        <div className="mb-4 border-b border-gray-700 pb-2 flex items-center justify-between">
+                            {/* 左侧：标题 */}
                             <span className="text-cyan-400 font-bold text-sm flex items-center">
                                 <span className="w-2 h-2 bg-cyan-400 rounded-full mr-2 shadow-[0_0_5px_#00e5ff]"></span>
-                                图层可视化配置
+                                图层配置
                             </span>
+
+                            {/* 右侧：开关 */}
+                            <Checkbox 
+                                checked={showAll}
+                                onChange={handleShowAllChange}
+                                disabled={!fileId || loading} 
+                                className="text-gray-300 text-xs"
+                            >
+                                <span className="text-gray-300">
+                                    数据显示({showAll ? '全量' : '分页'})
+                                </span>
+                            </Checkbox>
                         </div>
 
                         {/* Antd v6 使用 orientation 替代 direction */}

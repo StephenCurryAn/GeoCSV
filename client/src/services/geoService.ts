@@ -174,6 +174,17 @@ class GeoService {
     return res.data.data; 
   }
 
+  // ✅获取指定文件的所有数据 (用于地图全量展示)
+  // 传入一个足够大的 pageSize 来获取所有数据
+  async getAllFileData(id: string): Promise<PaginatedGeoResponse> {
+    // 假设后端允许较大的 pageSize，或者你可以专门写一个后端接口 /api/files/:id/all
+    // 这里我们直接复用分页接口，请求 100 万条数据
+    const res = await apiClient.get<ApiResponse<PaginatedGeoResponse>>(`/files/${id}/data`, {
+      params: { page: 1, pageSize: 1000000 } 
+    });
+    return res.data.data;
+  }
+
   /**
    * 上传地理数据文件
    * @param files 文件列表
