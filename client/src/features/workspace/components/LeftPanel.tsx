@@ -3,14 +3,19 @@ import React, { useState } from 'react';
 import { Segmented } from 'antd';
 import { AppstoreOutlined, ToolOutlined } from '@ant-design/icons';
 import FileTree from './FileTree';
+// 1. 引入新组件
+import AnalysisPanel from '../../analysis/components/AnalysisPanel';
 
 // 定义接口，接收从 App.tsx 传下来的回调
 interface LeftPanelProps {
   onDataLoaded: (fileName: string, data: any, fileId: string) => void;
   onSelectFile?: (fileName: string, fileId?: string) => void;
+  // ✅ 新增
+  activeFileId: string;
+  activeFileFields: string[];
 }
 
-const LeftPanel: React.FC<LeftPanelProps> = ({ onDataLoaded, onSelectFile }) => {
+const LeftPanel: React.FC<LeftPanelProps> = ({ onDataLoaded, onSelectFile, activeFileId, activeFileFields }) => {
   // 控制显示哪个组件
   const [activeTab, setActiveTab] = useState<string>('workspace');
 
@@ -63,13 +68,11 @@ const LeftPanel: React.FC<LeftPanelProps> = ({ onDataLoaded, onSelectFile }) => 
             onSelectFile={onSelectFile}
           />
         ) : (
-          // B. 显示分析工具组件 (占位)
-          <div className="flex flex-col items-center justify-center h-full text-gray-500 text-sm">
-            <div className="p-4 bg-gray-800 rounded-full mb-3 opacity-50">
-              <ToolOutlined className="text-3xl text-blue-400"/>
-            </div>
-            <p>分析工具箱开发中...</p>
-          </div>
+          // ✅ 4. 替换原来的占位符
+          <AnalysisPanel 
+             fileId={activeFileId} 
+             fields={activeFileFields}
+          />
         )}
       </div>
     </div>

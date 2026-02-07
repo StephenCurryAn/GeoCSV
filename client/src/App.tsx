@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import './App.css';
 import MainLayout from './layouts/MainLayout';
 import LeftPanel from './features/workspace/components/LeftPanel';
+import SplitTablePanel from './features/table/components/SplitTablePanel'; // 1. 引入分屏组件
 import DataPivot from './features/table/components/DataPivot';
 import MapView from './features/map/components/MapView';
 import { geoService , type PaginatedGeoResponse} from './services/geoService';
@@ -25,6 +26,19 @@ function App() {
     const [selectedFeature, setSelectedFeature] = useState<any>(null);
     // 辅助: 获取当前文件的数据对象
     const currentData = uploadedFilesData[activeFileName];
+
+    // ✅计算当前文件的字段列表 (传递给左侧分析面板用)
+    // 使用 useMemo 防止频繁重算，或者直接在渲染时计算
+    const activeFileFields = React.useMemo(() => {
+        if (currentData && currentData.features && currentData.features.length > 0) {
+            // 获取第一个要素的 properties 的 key
+            return Object.keys(currentData.features[0].properties || {}).filter(k => 
+                // 过滤掉我们自己加的内部字段
+                !['_geometry', 'cp', '_lat', '_lng', '_geom_coords'].includes(k)
+            );
+        }
+        return [];
+    }, [currentData]);
 
     /**
     * 一些辅助函数
@@ -293,31 +307,35 @@ function App() {
       <LeftPanel
         onDataLoaded={handleDataLoaded}
         onSelectFile={handleSelectFile}
+        activeFileId={activeFileId}      
+        activeFileFields={activeFileFields}
       />
 
       {/* 第 2 个子元素：中间 (直接放组件，不需要再包 div 了) */}
-      <DataPivot 
-          // ✅ data 这里只传 features 数组给表格显示  
-          data={currentData?.features || []} 
-          fileName={activeFileName} 
-          fileId={activeFileId}
-          // ✅ 传入分页对象
-          pagination={currentData?.pagination}
-          // ✅ 传入翻页回调
-          onPageChange={handlePageChange}
+      <SplitTablePanel>
+        <DataPivot 
+            // ✅ data 这里只传 features 数组给表格显示  
+            data={currentData?.features || []} 
+            fileName={activeFileName} 
+            fileId={activeFileId}
+            // ✅ 传入分页对象
+            pagination={currentData?.pagination}
+            // ✅ 传入翻页回调
+            onPageChange={handlePageChange}
 
-          // 当表格行被点击时，更新 App 的状态
-          onRowClick={(record) => setSelectedFeature(record)}
-          selectedFeature={selectedFeature}
-          // 传入修改回调
-          onDataChange={handleDataChange}
-          // 传入行列增删
-          onAddRow={handleAddRow}
-          onDeleteRow={handleDeleteRow}
-          onAddColumn={handleAddColumn}
-          onDeleteColumn={handleDeleteColumn}
-          
-      />
+            // 当表格行被点击时，更新 App 的状态
+            onRowClick={(record) => setSelectedFeature(record)}
+            selectedFeature={selectedFeature}
+            // 传入修改回调
+            onDataChange={handleDataChange}
+            // 传入行列增删
+            onAddRow={handleAddRow}
+            onDeleteRow={handleDeleteRow}
+            onAddColumn={handleAddColumn}
+            onDeleteColumn={handleDeleteColumn}
+            
+        />
+      </SplitTablePanel>
 
       {/* 第 3 个子元素：右侧 (直接放组件) */}
       <MapView 
