@@ -232,7 +232,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
         const sourceId = 'uploaded-geo-data';
 
         // 清理旧图层
-        const layersToRemove = ['geo-fill-layer', 'geo-line-layer', 'geo-highlight-fill', 'geo-highlight-line'];
+        const layersToRemove = ['geo-fill-layer', 'geo-line-layer', 'geo-point-layer', 'geo-highlight-fill', 'geo-highlight-line', 'geo-highlight-point'];
         layersToRemove.forEach(layer => {
             if (map.getLayer(layer)) map.removeLayer(layer);
         });
@@ -249,7 +249,10 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
             paint: {
                 'fill-color': '#00e5ff', // 默认颜色
                 'fill-opacity': 0.6      // 稍微提高不透明度以便看清色斑
-            }
+            },
+            // ✅增加过滤器，只允许 Geometry 类型为 Polygon 的要素显示
+            // 这样 LineString 就不会被强制渲染成闭合的面了
+            filter: ['==', '$type', 'Polygon']
         });
 
         // 2. 边框层
@@ -259,9 +262,25 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
             source: sourceId,
             paint: {
                 'line-color': activeBasemap === 'light' ? '#666' : '#a5f3fc', // 根据底图调整边框色
-                'line-width': 1,
-                'line-opacity': 0.5
-            }
+                'line-width': 2, // 稍微加粗一点让线更明显
+                'line-opacity': 0.8
+            },
+            // ✅只渲染 面(边框) 和 线
+            filter: ['any', ['==', '$type', 'Polygon'], ['==', '$type', 'LineString']]
+        });
+
+        // 3. 点图层 (新增)
+        map.addLayer({
+            id: 'geo-point-layer',
+            type: 'circle',
+            source: sourceId,
+            paint: {
+                'circle-radius': 6,
+                'circle-color': '#00e5ff', // 默认颜色
+                'circle-stroke-width': 1,
+                'circle-stroke-color': '#ffffff'
+            },
+            filter: ['==', '$type', 'Point']
         });
 
         // 3. 高亮层 (保持原样)
@@ -287,6 +306,20 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
             filter: ['==', 'id', 'nothing-selected']
         });
 
+        // 点高亮 (新增)
+        map.addLayer({
+            id: 'geo-highlight-point',
+            type: 'circle',
+            source: sourceId,
+            paint: {
+                'circle-radius': 8,
+                'circle-color': '#ffffff', // 高亮为白色
+                'circle-stroke-width': 2,
+                'circle-stroke-color': '#ff0000'
+            },
+            filter: ['==', 'id', 'nothing-selected']
+        });
+
         // 只有当文件名变化时，才重新调整视野
         if (fileName !== lastFileNameRef.current) {
             try {
@@ -298,31 +331,39 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
         }
 
         // 绑定事件
-        if (map.getLayer('geo-fill-layer')) {
-            // 当用户在地图上点击，
-            // 且点击的位置正好位于 ID 为 'geo-fill-layer' 的图层形状（Feature）上时，
-            // 执行后面的函数
-            map.on('click', 'geo-fill-layer', (e) => {
-                if (e.features && e.features.length > 0) {
-                    const feature = e.features[0];
-                    const props = feature.properties;
-                    // 处理 cp 字符串
-                    if (typeof props.cp === 'string') {
-                        try { props.cp = JSON.parse(props.cp); } catch (err) {}
+        // ✅交互层列表 (修改交互逻辑以支持点和线)
+        const interactiveLayers = ['geo-fill-layer', 'geo-line-layer', 'geo-point-layer'];
+        interactiveLayers.forEach(layerId => {
+            if (map.getLayer(layerId)) {
+                map.on('click', layerId, (e) => {
+                    // 防止点击面时同时也触发线的点击，或者重叠时触发多次
+                    // 简单的去重逻辑：只取第一个
+                    if (e.features && e.features.length > 0) {
+                        const feature = e.features[0];
+                        const props = feature.properties;
+                        
+                        if (typeof props.cp === 'string') {
+                            try { props.cp = JSON.parse(props.cp); } catch (err) {}
+                        }
+                        
+                        // 计算中心点兜底逻辑
+                        if (!props.cp || !Array.isArray(props.cp)) {
+                            if (feature.geometry.type === 'Point') {
+                                // @ts-ignore
+                                props.cp = feature.geometry.coordinates;
+                            } else {
+                                // 线或面，使用鼠标点击位置作为弹窗位置
+                                props.cp = [e.lngLat.lng, e.lngLat.lat];
+                            }
+                        }
+                        
+                        if (onFeatureClick) onFeatureClick(props);
                     }
-                    if (!props.cp || !Array.isArray(props.cp)) {
-                         try {
-                            // const centerFeature = center(feature as any);
-                            // props.cp = centerFeature.geometry.coordinates;
-                            props.cp = feature.properties?.cp;
-                        } catch(err) { props.cp = [e.lngLat.lng, e.lngLat.lat]; }
-                    }
-                    if (onFeatureClick) onFeatureClick(props);
-                }
-            });
-            map.on('mouseenter', 'geo-fill-layer', () => map.getCanvas().style.cursor = 'pointer');
-            map.on('mouseleave', 'geo-fill-layer', () => map.getCanvas().style.cursor = '');
-        }
+                });
+                map.on('mouseenter', layerId, () => map.getCanvas().style.cursor = 'pointer');
+                map.on('mouseleave', layerId, () => map.getCanvas().style.cursor = '');
+            }
+        });
     };
 
     /**

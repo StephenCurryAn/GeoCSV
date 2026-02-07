@@ -134,7 +134,11 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
         sortable: true,
         filter: true,
         resizable: true,
-        flex: 1,
+        // ✅移除 flex: 1，防止强行压缩列宽
+        // flex: 1,
+        // ✅设置合理的最小宽度和默认宽度
+        minWidth: 100, // 最小 100px，防止缩得太小
+        width: 150,    // 默认给一个舒适的宽度 (比如 150px)
 
         // 只有不在 readOnlyFields 里的字段可以编辑
         editable: !readOnlyFields.includes(key),
@@ -444,6 +448,12 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
 
             animateRows={true}
 
+            // ✅自动调整列宽策略
+            // 当表格数据准备好后，自动根据 [表头内容] 和 [单元格内容] 计算最佳宽度
+            // 这会让列宽自动撑开，如果总宽度超过容器，AG Grid 会自动出现横向滚动条
+            autoSizeStrategy={{
+                type: 'fitCellContents' // 适应单元格内容
+            }}
             // 明确配置选择模式和复选框
             // checkboxes: true 确保每行前面都有框 (虽然你可能通过其他方式实现了，但这样写最稳)
             // headerCheckbox: false 禁用全选，因为我们做的是单选联动
