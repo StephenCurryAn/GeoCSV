@@ -14,6 +14,7 @@ import jschardet from 'jschardet';
 import { center } from '@turf/turf';
 import FileNode from '../models/FileNode'; // 导入文件节点模型
 import Feature from '../models/Feature'; // 引入 Feature 模型
+import { parse } from 'wellknown'; // 新增这一行，解析WKT
 
 const fsPromises = fs.promises; // 使用这种方式获取 promises，兼容性最好，防止 undefined 报错
 // 全局环境补丁 (模拟浏览器环境)
@@ -277,6 +278,29 @@ function parseCsvToGeoJSON(csvString: string) {
 
             try {
                 if (typeof rawGeom === 'string') {
+
+                    // ✅ 新增：WKT 格式检测与解析 (针对 GBMI 数据)
+                    // 如果是以 P (Point/Polygon), L (LineString), M (Multi...) 开头，通常是 WKT
+                    if (/^[A-Z]/.test(rawGeom.trim())) {
+                        try {
+                            const geoJson = parse(rawGeom.trim()); // 这里假设您已经改用 import { parse } from 'wellknown'
+                            
+                            if (geoJson) {
+                                // ✅强制转换为 any，绕过 TypeScript 对 GeometryCollection 的检查
+                                const geometry = geoJson as any;
+
+                                // 只有当 coordinates 存在时才赋值
+                                if (geometry.coordinates) {
+                                    coordinates = geometry.coordinates;
+                                    geoType = geometry.type;
+                                }
+                            }
+                        } catch (wktError) {
+                            console.warn('WKT 解析失败:', wktError);
+                        }
+                    }
+
+
                     if (rawGeom.trim().startsWith('[') || rawGeom.trim().startsWith('{')) {
                         // 它把死板的文本字符串，变成活生生的 JavaScript 对象或数组。
                         // coordinates = JSON.parse(rawGeom);
