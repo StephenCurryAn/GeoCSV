@@ -2,8 +2,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { bbox } from '@turf/turf';
-import { App, Checkbox, Spin, Select, ConfigProvider, theme, Space, Typography } from 'antd'; // 引入 Ant Design
+import { Button, Tooltip, App, Checkbox, Spin, Select, ConfigProvider, theme, Space, Typography } from 'antd'; // 引入 Ant Design
+import ChartOverlay from './ChartOverlay';
 import { geoService } from '../../../services/geoService';
+import { BarChartOutlined } from '@ant-design/icons';
+import { useAnalysisStore } from '../../../stores/useAnalysisStore'
 
 const { Option } = Select;
 const { Text } = Typography;
@@ -164,6 +167,9 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
             setAllData(null); // 设置为 null，垃圾回收会介入
         }
     };
+
+    // ✅ 2. 获取 store 控制开关
+    const { isChartVisible, setChartVisible, pivotData } = useAnalysisStore();
 
     // 初始化地图
     useEffect(() => {
@@ -726,6 +732,25 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                 </div>
             )}
             
+            {/* ✅ 3. 放置 HUD 图表组件 (绝对定位在地图层之上) */}
+            <ChartOverlay />
+
+            {/* ✅ 4. (可选) 增加一个悬浮按钮，用于在关闭图表后重新打开 */}
+            {!isChartVisible && pivotData && pivotData.length > 0 && (
+                <div className="absolute top-4 right-4 z-900">
+                    <Tooltip title="显示透视分析图表" placement="left">
+                        <Button 
+                            type="primary" 
+                            shape="circle" 
+                            size="large"
+                            icon={<BarChartOutlined />} 
+                            onClick={() => setChartVisible(true)}
+                            className="bg-cyan-600 border-cyan-500 shadow-lg shadow-cyan-900/50"
+                        />
+                    </Tooltip>
+                </div>
+            )}
+
             <style>{`
                 /* 复用之前的 Popup 样式 */
                 .dark-cool-popup .maplibregl-popup-content {
