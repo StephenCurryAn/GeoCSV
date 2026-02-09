@@ -85,6 +85,16 @@ const BASEMAPS = [
     }
 ];
 
+// ✅ 复制一份 Neon 色盘 (为了保持颜色一致，或者你可以把它抽离到一个单独的 constants 文件)
+const NEON_PALETTE_COLORS = [
+    '#22d3ee', // 青
+    '#e879f9', // 紫
+    '#3b82f6', // 蓝
+    '#34d399', // 绿
+    '#facc15', // 黄
+    '#f87171', // 红
+];
+
 const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeature, onFeatureClick }) => {
     // ✅ 修改 2: 获取上下文感知的 message 实例
     // 注意：MapView 必须被包裹在 <App> 组件中（通常在 main.tsx 或 App.tsx 已经包了）
@@ -169,7 +179,11 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
     };
 
     // ✅ 2. 获取 store 控制开关
-    const { isChartVisible, setChartVisible, pivotData } = useAnalysisStore();
+    const { 
+            isChartVisible, setChartVisible, 
+            pivotData, pivotConfig, // 数据
+            isMapLinkageEnabled, highlightedCategory // 联动状态
+        } = useAnalysisStore();
 
     // 初始化地图
     useEffect(() => {
@@ -226,6 +240,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
 
     /**
      * 核心渲染逻辑：只负责 Geometry 和基础图层架构
+     * ✅纯粹的渲染函数 (移除底部的事件绑定代码)
      */
     const renderGeoJSON = (geoJSON: any) => {
         const map = mapInstance.current;
@@ -335,47 +350,171 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                 lastFileNameRef.current = fileName; // 更新记录
             } catch(e) { console.warn('BBox calc failed', e) }
         }
+        // ❌ 删除这里的 map.on(...) 代码块
+    };
+
+    // 2. ✅ 新增：单独的 Effect 处理事件绑定 (只运行一次)
+    useEffect(() => {
+        const map = mapInstance.current;
+        if (!map) return;
+
+        // 定义交互图层 ID
+        const interactiveLayers = ['geo-fill-layer', 'geo-line-layer', 'geo-point-layer'];
+
+        // 定义点击回调 (抽离出来)
+        const handleClick = (e: any) => {
+            if (e.features && e.features.length > 0) {
+                const feature = e.features[0];
+                const props = feature.properties;
+                
+                // 处理 cp
+                if (typeof props.cp === 'string') {
+                    try { props.cp = JSON.parse(props.cp); } catch (err) {}
+                }
+                if (!props.cp || !Array.isArray(props.cp)) {
+                    if (feature.geometry.type === 'Point') {
+                        // @ts-ignore
+                        props.cp = feature.geometry.coordinates;
+                    } else {
+                        props.cp = [e.lngLat.lng, e.lngLat.lat];
+                    }
+                }
+                
+                // 调用父组件传入的回调
+                if (onFeatureClick) onFeatureClick(props);
+            }
+        };
+
+        // 定义鼠标样式回调
+        const handleMouseEnter = () => map.getCanvas().style.cursor = 'pointer';
+        const handleMouseLeave = () => map.getCanvas().style.cursor = '';
 
         // 绑定事件
-        // ✅交互层列表 (修改交互逻辑以支持点和线)
-        const interactiveLayers = ['geo-fill-layer', 'geo-line-layer', 'geo-point-layer'];
+        // 注意：即使图层此时不存在，MapLibre 也会注册监听器，一旦图层出现就会生效
         interactiveLayers.forEach(layerId => {
-            if (map.getLayer(layerId)) {
-                map.on('click', layerId, (e) => {
-                    // 防止点击面时同时也触发线的点击，或者重叠时触发多次
-                    // 简单的去重逻辑：只取第一个
-                    if (e.features && e.features.length > 0) {
-                        const feature = e.features[0];
-                        const props = feature.properties;
-                        
-                        if (typeof props.cp === 'string') {
-                            try { props.cp = JSON.parse(props.cp); } catch (err) {}
-                        }
-                        
-                        // 计算中心点兜底逻辑
-                        if (!props.cp || !Array.isArray(props.cp)) {
-                            if (feature.geometry.type === 'Point') {
-                                // @ts-ignore
-                                props.cp = feature.geometry.coordinates;
-                            } else {
-                                // 线或面，使用鼠标点击位置作为弹窗位置
-                                props.cp = [e.lngLat.lng, e.lngLat.lat];
-                            }
-                        }
-                        
-                        if (onFeatureClick) onFeatureClick(props);
-                    }
-                });
-                map.on('mouseenter', layerId, () => map.getCanvas().style.cursor = 'pointer');
-                map.on('mouseleave', layerId, () => map.getCanvas().style.cursor = '');
-            }
+            map.on('click', layerId, handleClick);
+            map.on('mouseenter', layerId, handleMouseEnter);
+            map.on('mouseleave', layerId, handleMouseLeave);
         });
+
+        // ✅ 清理函数：组件卸载时移除监听器，防止内存泄漏
+        return () => {
+            interactiveLayers.forEach(layerId => {
+                map.off('click', layerId, handleClick);
+                map.off('mouseenter', layerId, handleMouseEnter);
+                map.off('mouseleave', layerId, handleMouseLeave);
+            });
+        };
+    }, [isMapLoaded]); // 依赖 isMapLoaded 确保 mapInstance 存在即可
+
+    /**
+     * ✅ 新增：处理联动颜色映射的核心函数
+     */
+    const updateLinkageColors = () => {
+        const map = mapInstance.current;
+        if (!map || !map.getLayer('geo-fill-layer')) return;
+
+        // 1. 基本校验：必须开启联动、有透视数据、只选了行没选列 (Condition 1)
+        const isCategoricalMode = isMapLinkageEnabled && pivotData && pivotData.length > 0 && !pivotConfig.groupByCol && pivotConfig.groupByRow;
+
+        if (isCategoricalMode) {
+            const rowField = pivotConfig.groupByRow!; // 比如 "Province"
+            
+            // --- A. 构建颜色表达式 (Categorical Match) ---
+            // 语法: ['match', ['get', field], val1, color1, val2, color2, defaultColor]
+            const colorExpression: any[] = ['match', ['get', rowField]];
+            
+            pivotData!.forEach((item, index) => {
+                const color = NEON_PALETTE_COLORS[index % NEON_PALETTE_COLORS.length];
+                colorExpression.push(item.rowKey); // 数据值 (例如 "Jiangsu")
+                colorExpression.push(color);       // 对应的霓虹色
+            });
+            
+            colorExpression.push('#6b7280'); // Default color (灰色) 如果匹配不到
+
+            // --- B. 构建高亮/透明度表达式 (Highlight Opacity) ---
+            let opacityExpression: any = 0.8; // 默认不透明度
+
+            if (highlightedCategory) {
+                // 如果有高亮项：选中的保持 0.8~1，没选中的变暗 (0.1)
+                opacityExpression = [
+                    'case',
+                    ['==', ['get', rowField], highlightedCategory],
+                    0.9, // 选中
+                    0.1  // 未选中 (变暗)
+                ];
+            }
+
+            // --- C. 构建线框宽度表达式 (Highlight Stroke) ---
+            let lineWidthExpression: any = 2;
+            if (highlightedCategory) {
+                lineWidthExpression = [
+                    'case',
+                    ['==', ['get', rowField], highlightedCategory],
+                    4, // 选中加粗
+                    1
+                ];
+            }
+
+            // 应用样式
+            map.setPaintProperty('geo-fill-layer', 'fill-color', colorExpression);
+            map.setPaintProperty('geo-fill-layer', 'fill-opacity', opacityExpression);
+            
+            // 只有在联动模式下，才去控制线框颜色以匹配填充色（或者保持白色高亮）
+            map.setPaintProperty('geo-line-layer', 'line-width', lineWidthExpression);
+            // 让线框颜色也稍微跟随一下，或者保持亮色
+            if (highlightedCategory) {
+                 map.setPaintProperty('geo-line-layer', 'line-color', [
+                    'case',
+                    ['==', ['get', rowField], highlightedCategory],
+                    '#ffffff', // 选中变白
+                    '#4b5563'  // 未选中变灰
+                 ]);
+            } else {
+                 map.setPaintProperty('geo-line-layer', 'line-color', 'rgba(255,255,255,0.3)');
+            }
+
+            // 针对点图层 (geo-point-layer) 的处理
+            if (map.getLayer('geo-point-layer')) {
+                map.setPaintProperty('geo-point-layer', 'circle-color', colorExpression);
+                map.setPaintProperty('geo-point-layer', 'circle-opacity', opacityExpression);
+                map.setPaintProperty('geo-point-layer', 'circle-radius', 
+                    highlightedCategory ? 
+                    ['case', ['==', ['get', rowField], highlightedCategory], 10, 4] : 
+                    6
+                );
+            }
+
+            console.log(`🔗 联动模式: Field=${rowField}, Highlight=${highlightedCategory}`);
+
+        } else {
+            // 如果联动关闭，或者是二维透视 (Situation 2)，或者是普通模式
+            // 回退到原有的 updateChoroplethColors 逻辑
+            // 这里我们手动调用一下原来的逻辑来恢复
+            // 但原来的逻辑依赖 activeField 和 activeScheme
+            updateChoroplethColors(); 
+            
+            // 恢复默认透明度和线宽
+            map.setPaintProperty('geo-fill-layer', 'fill-opacity', 0.6);
+            map.setPaintProperty('geo-line-layer', 'line-width', 2);
+            map.setPaintProperty('geo-line-layer', 'line-color', activeBasemap === 'light' ? '#666' : '#a5f3fc');
+            
+            if (map.getLayer('geo-point-layer')) {
+                map.setPaintProperty('geo-point-layer', 'circle-color', '#00e5ff');
+                map.setPaintProperty('geo-point-layer', 'circle-opacity', 1);
+                map.setPaintProperty('geo-point-layer', 'circle-radius', 6);
+            }
+        }
     };
 
     /**
      * 更新颜色映射 (Choropleth)
      */
     const updateChoroplethColors = () => {
+        // ✅ 卫兵：如果开启了联动模式且符合条件，直接退出，不执行普通数值映射
+        const isCategoricalMode = isMapLinkageEnabled && pivotData && !pivotConfig.groupByCol && pivotConfig.groupByRow;
+        if (isCategoricalMode) return;
+
         const map = mapInstance.current;
         const currentDisplayData = displayDataRef.current;
         // ✅这里也改为使用 displayData
@@ -426,16 +565,37 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
         console.log(`🎨 颜色映射更新: Field=${activeField}, Range=[${min}, ${max}]`);
     };
 
-    // ✅监听数据变化，渲染图层
+    // ✅ Effect 1: 仅处理“数据几何渲染” (Geometry)
+    // 只有当文件数据 (displayData) 变化，或者地图刚加载完成时，才重绘图层
     useEffect(() => {
         if (isMapLoaded && displayData) {
-            // 渲染几何图形
+            // 1. 先把几何图形画上去 (这一步会移除旧图层，添加新图层)
             renderGeoJSON(displayData);
-            // 渲染后立即应用一次颜色（如果已有选中的字段）
-            updateChoroplethColors();
-            console.log('数据渲染完成')
+            
+            // 2. 画完之后，立即应用一次当前的颜色逻辑
+            // 否则新画上去的图层会是默认的蓝色，直到下一次样式更新
+            updateLinkageColors();
+            
+            console.log('🗺️ 地图几何重绘完成');
         }
-    }, [displayData, isMapLoaded]);
+    }, [displayData, isMapLoaded]); // ❌ 坚决不要加 pivotData, highlightedCategory 等样式状态，防止闪烁！
+
+
+    // ✅ Effect 2: 仅处理“样式/颜色更新” (Paint)
+    // 当联动开关、高亮状态、透视数据、或传统配色字段变化时，只更新颜色，不重绘几何
+    useEffect(() => {
+        if (isMapLoaded && displayData) {
+            updateLinkageColors();
+        }
+    }, [
+        // 样式相关依赖
+        isMapLinkageEnabled, 
+        pivotData, 
+        pivotConfig, 
+        highlightedCategory, // 高亮交互
+        activeField,         // 传统数值映射字段
+        activeScheme         // 传统配色方案
+    ]);
 
     // 监听可视化配置变化（字段、配色），只更新 Paint Property，不重绘 Geometry
     useEffect(() => {

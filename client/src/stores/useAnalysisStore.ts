@@ -42,6 +42,14 @@ interface AnalysisState {
     setPivotPanelOpen: (isOpen: boolean) => void;
     isChartVisible: boolean;
     setChartVisible: (visible: boolean) => void;
+
+    // ✅ 新增：地图联动相关状态
+    isMapLinkageEnabled: boolean;
+    setMapLinkageEnabled: (enabled: boolean) => void;
+    
+    // ✅ 新增：当前高亮的分类（对应 pivotData 的 rowKey）
+    highlightedCategory: string | null;
+    setHighlightedCategory: (category: string | null) => void;
 }
 
 export const useAnalysisStore = create<AnalysisState>((set) => ({
@@ -80,4 +88,11 @@ export const useAnalysisStore = create<AnalysisState>((set) => ({
     setPivotPanelOpen: (isOpen) => set({ isPivotPanelOpen: isOpen }),
     isChartVisible: false, 
     setChartVisible: (visible) => set({ isChartVisible: visible }),
+
+    // ✅ 新增状态初始化
+    isMapLinkageEnabled: false,
+    setMapLinkageEnabled: (enabled) => set({ isMapLinkageEnabled: enabled }),
+    
+    highlightedCategory: null,
+    setHighlightedCategory: (category) => set({ highlightedCategory: category }),
 }));

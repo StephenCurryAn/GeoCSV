@@ -24,11 +24,13 @@ const ChartOverlay: React.FC = () => {
         isChartVisible, setChartVisible, 
         pivotData, pivotConfig, generatedColumns, // 透视数据
         rawScatterData, scatterConfig, // 散点数据
-        chartType, setChartType // 全局图表类型
+        chartType, setChartType, // 全局图表类型
+        // ✅ 引入联动状态
+        isMapLinkageEnabled, setMapLinkageEnabled,
+        highlightedCategory, // ✅ 必须解构出当前状态
+        setHighlightedCategory
     } = useAnalysisStore();
 
-    const [mapLinkage, setMapLinkage] = useState(false);
-    
     // 散点图数据源切换：'Pivoted'(透视结果) vs 'Raw'(原始数据)
     const [scatterSource, setScatterSource] = useState<'Pivoted' | 'Raw'>('Pivoted');
 
@@ -299,6 +301,23 @@ const ChartOverlay: React.FC = () => {
         }
     }, [pivotData, rawScatterData, chartType, scatterSource, scatterConfig, generatedColumns, pivotConfig, isChartVisible]); 
 
+    // ✅ 定义点击事件处理
+    const onChartClick = (params: any) => {
+        if (!isMapLinkageEnabled) return;
+
+        // params.name 通常对应 X 轴类别 (即 rowKey)
+        if (params.name) {
+            // ✅ 修正：直接使用解构出来的 highlightedCategory 进行判断，而不是使用回调
+            const nextCategory = highlightedCategory === params.name ? null : params.name;
+            setHighlightedCategory(nextCategory);
+        }
+    };
+    
+    // ✅ 点击空白处取消高亮 (可选，取决于 zrender 事件，这里先只处理数据点击)
+    const onChartEvents = {
+        'click': onChartClick
+    };
+
     if (!isChartVisible) return null;
 
     return (
@@ -346,22 +365,43 @@ const ChartOverlay: React.FC = () => {
 
                 <Button 
                     type="text" shape="circle" icon={<CloseOutlined className="text-gray-300 hover:text-white" />} 
-                    onClick={() => setChartVisible(false)} className="hover:bg-white/10"
+                    onClick={() =>{
+                        setChartVisible(false);
+                        setHighlightedCategory(null); // ✅ 关闭图表时清除高亮
+                    }} className="hover:bg-white/10"
                 />
             </div>
 
             {/* 2. ECharts */}
             <div className="flex-1 w-full h-full p-2 relative">
-                <ReactECharts option={getOption} style={{ height: '100%', width: '100%' }} theme="dark" autoResize notMerge />
+                <ReactECharts 
+                    option={getOption} 
+                    style={{ height: '100%', width: '100%' }} 
+                    theme="dark" 
+                    autoResize 
+                    notMerge
+                    // ✅ 绑定事件
+                    onEvents={onChartEvents} 
+                />
             </div>
 
             {/* 3. Footer */}
             <div className="h-10 shrink-0 flex items-center justify-between px-4 border-t border-white/5 bg-white/5 text-xs text-gray-300">
                 <div className="flex items-center gap-2 font-medium">
-                    <EnvironmentOutlined className={mapLinkage ? 'text-cyan-400' : 'text-gray-400'} />
+                    {/* ✅ 根据 store 状态改变颜色 */}
+                    <EnvironmentOutlined className={isMapLinkageEnabled ? 'text-cyan-400' : 'text-gray-400'} />
                     <span>地图颜色映射联动</span>
                 </div>
-                <Switch size="small" checked={mapLinkage} onChange={setMapLinkage} className="bg-gray-500/50" />
+                {/* ✅ 使用 store 的 action */}
+                <Switch 
+                    size="small" 
+                    checked={isMapLinkageEnabled} 
+                    onChange={(checked) => {
+                        setMapLinkageEnabled(checked);
+                        if(!checked) setHighlightedCategory(null); // 关闭联动时清除高亮
+                    }} 
+                    className="bg-gray-500/50" 
+                />
             </div>
 
             <style>{`
