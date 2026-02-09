@@ -601,7 +601,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
             .addTo(map);
 
             // 飞到该位置
-            map.flyTo({ center: centerCoord, zoom: 12, speed: 1.5 });
+            map.flyTo({ center: centerCoord, zoom: 16, speed: 1.5 });
         }
     }, [selectedFeature, isMapLoaded]);
 
