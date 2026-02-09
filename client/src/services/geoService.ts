@@ -207,6 +207,7 @@ class GeoService {
     // 对应后端路由: POST /api/files/upload
     const res = await apiClient.post<{ data: UploadResponse }>('/files/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000,
     });
     
     // 返回后端响应中的 data 字段 (包含 _id, totalFeatures 等)

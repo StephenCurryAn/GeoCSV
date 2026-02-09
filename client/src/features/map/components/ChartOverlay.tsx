@@ -5,7 +5,7 @@ import {
     CloseOutlined, BarChartOutlined, RadarChartOutlined, 
     DotChartOutlined, PieChartOutlined, EnvironmentOutlined 
 } from '@ant-design/icons';
-// ✅ 修复：使用 type 关键字导入 TS 类型，防止 verbatimModuleSyntax 报错
+// ✅ 引入类型定义
 import { useAnalysisStore, type ChartType } from '../../../stores/useAnalysisStore';
 import * as echarts from 'echarts/core';
 
@@ -69,6 +69,7 @@ const ChartOverlay: React.FC = () => {
         
         let series: any[] = [];
         if (!is2D) {
+            // 一维模式
             series.push({
                 name: pivotConfig.valueField || '统计值',
                 type: 'bar',
@@ -83,6 +84,7 @@ const ChartOverlay: React.FC = () => {
                 barMaxWidth: 50,
             });
         } else {
+            // 二维模式
             series = generatedColumns.map((colKey, index) => {
                 const colorPair = NEON_PALETTE[index % NEON_PALETTE.length];
                 return {
@@ -90,6 +92,19 @@ const ChartOverlay: React.FC = () => {
                     type: 'bar',
                     data: pivotData.map(row => row[colKey] || 0),
                     barMaxWidth: 30,
+                    
+                    // ✅ 核心修复：找回高亮交互功能
+                    emphasis: { 
+                        focus: 'series', // 聚焦当前系列，淡化其他系列
+                        blurScope: 'coordinateSystem', // 在整个坐标系内淡化
+                        itemStyle: {
+                            shadowBlur: 15,
+                            shadowColor: colorPair[0], // 高亮时增加同色系发光
+                            borderColor: '#fff', // 增加白色描边提升对比度
+                            borderWidth: 1
+                        }
+                    },
+
                     itemStyle: {
                         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
                             { offset: 0, color: colorPair[0] }, { offset: 1, color: colorPair[1] }
@@ -111,36 +126,31 @@ const ChartOverlay: React.FC = () => {
         };
     };
 
-    // ================= 🕸️ 雷达图配置 (最终极简修复版) =================
+    // ================= 🕸️ 雷达图配置 (无警告版) =================
     const getRadarOption = () => {
         if (!pivotData) return {};
         const is2D = generatedColumns.length > 1 || (generatedColumns[0] !== 'value');
-        let indicators: { name: string, max?: number }[] = []; // ✅ 不强制 max
+        let indicators: { name: string, max?: number }[] = [];
         let seriesData: any[] = [];
 
         if (is2D) {
-            // 多维：让 ECharts 自动计算 max，我们不干预
             indicators = generatedColumns.map(col => ({ 
                 name: col,
-                // max: undefined // 留空，ECharts 会自动找最漂亮的刻度
+                // max: undefined // 自动
             }));
-            
             seriesData = pivotData!.slice(0, 10).map((row) => ({
                 value: generatedColumns.map(col => row[col] || 0),
                 name: row.rowKey
             }));
         } else {
-            // 单维：虽然可以自动，但为了视觉统一，我们取所有数据的最大值，向上取整一点点
-            // 但不再强求完美的整除
             const values = pivotData!.map(item => Number(item.value || 0));
             const maxVal = Math.max(...values);
-            // 简单的留白，不涉及复杂算法
             const safeMax = maxVal > 0 ? Math.ceil(maxVal * 1.1) : 10;
 
             const displayData = pivotData!.slice(0, 12); 
             indicators = displayData.map(item => ({
                 name: String(item.rowKey).substring(0, 8),
-                max: safeMax // 所有轴共享同一个 max，保持形状比例
+                max: safeMax
             }));
             seriesData = [{
                 value: displayData.map(item => item.value),
@@ -162,10 +172,7 @@ const ChartOverlay: React.FC = () => {
             radar: {
                 indicator: indicators,
                 shape: 'polygon',
-                // ✅ 彻底移除 splitNumber，把控制权还给 ECharts
-                // ECharts 会根据数据范围自动决定分成 3段、4段还是5段，保证刻度总是可读的
-                // splitNumber: 5, 
-                
+                // ✅ 保持：移除 splitNumber，隐藏标签，解决警告
                 axisName: {
                     color: '#22d3ee',
                     fontSize: 12,
@@ -173,13 +180,8 @@ const ChartOverlay: React.FC = () => {
                     textShadowColor: 'rgba(0,0,0,0.5)',
                     textShadowBlur: 2
                 },
-                
-                // ✅ 隐藏轴标签和刻度，这是解决警告的最强手段
-                // 因为只要不显示标签，ECharts 就不需要计算标签是否重叠/可读
                 axisLabel: { show: false },
                 axisTick: { show: false },
-                
-                // 保留漂亮的网格线
                 splitLine: {
                     lineStyle: {
                         color: [
@@ -221,16 +223,12 @@ const ChartOverlay: React.FC = () => {
 
     // ================= 📉 散点图配置 =================
     const getScatterOption = () => {
-        // 模式 A: 使用原始数据 (Raw) - 真散点图
         if (scatterSource === 'Raw') {
             if (!rawScatterData || !scatterConfig.xField || !scatterConfig.yField) return {};
             
             const xField = scatterConfig.xField;
             const yField = scatterConfig.yField;
-            const data = rawScatterData.map(item => [
-                item[xField], // X
-                item[yField]  // Y
-            ]);
+            const data = rawScatterData.map(item => [item[xField], item[yField]]);
 
             return {
                 backgroundColor: 'transparent',
@@ -241,44 +239,19 @@ const ChartOverlay: React.FC = () => {
                     textStyle: { color: '#fff' },
                     formatter: (params: any) => {
                         const val = params.value;
-                        return `
-                            <div style="font-weight:bold;color:#a78bfa">● Raw Point</div>
-                            <div>${xField}: ${val[0]}</div>
-                            <div>${yField}: ${val[1]}</div>
-                        `;
+                        return `<div style="font-weight:bold;color:#a78bfa">● Raw Point</div><div>${xField}: ${val[0]}</div><div>${yField}: ${val[1]}</div>`;
                     }
                 },
                 grid: { top: '15%', left: '8%', right: '8%', bottom: '12%', containLabel: true },
-                xAxis: { 
-                    type: 'value', 
-                    name: xField, nameTextStyle: { color: '#a78bfa' },
-                    splitLine: { show: false },
-                    axisLabel: { color: '#e5e7eb' } 
-                },
-                yAxis: { 
-                    type: 'value', 
-                    name: yField, nameTextStyle: { color: '#a78bfa' },
-                    splitLine: { lineStyle: { color: 'rgba(255,255,255,0.08)', type: 'dashed' } },
-                    axisLabel: { color: '#9ca3af' },
-                    scale: true // 不强制从0开始
-                },
+                xAxis: { type: 'value', name: xField, nameTextStyle: { color: '#a78bfa' }, splitLine: { show: false }, axisLabel: { color: '#e5e7eb' } },
+                yAxis: { type: 'value', name: yField, nameTextStyle: { color: '#a78bfa' }, splitLine: { lineStyle: { color: 'rgba(255,255,255,0.08)', type: 'dashed' } }, axisLabel: { color: '#9ca3af' }, scale: true },
                 series: [{
-                    type: 'scatter',
-                    symbolSize: 6, // 原始数据点稍微小一点
-                    large: true,   // ✅ 开启大数据量优化 (Canvas 模式)
-                    itemStyle: {
-                        color: '#a78bfa', // 紫色系，区别于聚合数据的青色
-                        shadowBlur: 5,
-                        shadowColor: 'rgba(167, 139, 250, 0.5)',
-                        opacity: 0.8
-                    },
+                    type: 'scatter', symbolSize: 6, large: true,
+                    itemStyle: { color: '#a78bfa', shadowBlur: 5, shadowColor: 'rgba(167, 139, 250, 0.5)', opacity: 0.8 },
                     data: data
                 }]
             };
-        } 
-        
-        // 模式 B: 使用透视数据 (Pivoted) - 聚合散点 (Dot Plot)
-        else {
+        } else {
             if (!pivotData) return {};
             const is2D = generatedColumns.length > 1 || (generatedColumns[0] !== 'value');
             const xAxisData = pivotData.map(item => item.rowKey);
@@ -289,7 +262,7 @@ const ChartOverlay: React.FC = () => {
                     name: pivotConfig.valueField || '统计值',
                     type: 'scatter',
                     data: pivotData.map(item => item.value),
-                    symbolSize: 15, // 聚合点大一点
+                    symbolSize: 15,
                     itemStyle: { color: '#22d3ee', shadowBlur: 10, shadowColor: 'rgba(34, 211, 238, 0.5)' }
                 });
             } else {
@@ -310,12 +283,7 @@ const ChartOverlay: React.FC = () => {
                 tooltip: { trigger: 'item', backgroundColor: 'rgba(0,0,0,0.8)', textStyle: { color: '#fff' } },
                 legend: { show: is2D, data: is2D ? generatedColumns : [], textStyle: { color: '#e5e7eb' }, bottom: 5 },
                 grid: { top: '15%', left: '5%', right: '5%', bottom: '15%', containLabel: true },
-                xAxis: { 
-                    type: 'category', // 透视数据的 X 轴通常是分类 (Row Group)
-                    data: xAxisData, 
-                    axisLine: { show: false }, axisTick: { show: false }, 
-                    axisLabel: { color: '#e5e7eb', rotate: 30 } 
-                },
+                xAxis: { type: 'category', data: xAxisData, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: '#e5e7eb', rotate: 30 } },
                 yAxis: { type: 'value', splitLine: { lineStyle: { color: 'rgba(255,255,255,0.08)', type: 'dashed' } }, axisLabel: { color: '#9ca3af' } },
                 series: series
             };
