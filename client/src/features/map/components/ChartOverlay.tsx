@@ -1,23 +1,88 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import ReactECharts from 'echarts-for-react';
-import { Button, Segmented, Switch } from 'antd';
+import { Button, Segmented, Switch, Select } from 'antd';
 import { 
     CloseOutlined, BarChartOutlined, RadarChartOutlined, 
     DotChartOutlined, PieChartOutlined, EnvironmentOutlined 
 } from '@ant-design/icons';
 // ✅ 引入类型定义
-import { useAnalysisStore, type ChartType } from '../../../stores/useAnalysisStore';
+import { useAnalysisStore, type ChartType, type ColorThemeType } from '../../../stores/useAnalysisStore';
 import * as echarts from 'echarts/core';
 
-// 霓虹色盘
-const NEON_PALETTE = [
-    ['#22d3ee', 'rgba(34, 211, 238, 0.1)'], // 青
-    ['#e879f9', 'rgba(232, 121, 249, 0.1)'], // 紫
-    ['#3b82f6', 'rgba(59, 130, 246, 0.1)'],  // 蓝
-    ['#34d399', 'rgba(52, 211, 153, 0.1)'],  // 绿
-    ['#facc15', 'rgba(250, 204, 21, 0.1)'],  // 黄
-    ['#f87171', 'rgba(248, 113, 113, 0.1)'], // 红
+// ✅ [修改] 升级主题配置接口
+// type: 'single' (单色+透明度变化) | 'gradient' (双色/多色插值)
+interface ThemeConfig {
+    label: string;
+    type: 'single' | 'gradient'; 
+    primary: string; // UI主色 (按钮/高亮)
+    gradient: [string, string]; // 柱状图用的填充渐变
+    stops?: [string, string]; // 地图用的插值断点 [LowColor, HighColor]
+}
+
+// ✅ [新增] 定义更丰富的色系
+export const THEME_COLORS: Record<ColorThemeType, ThemeConfig> = {
+    // === 原有单色系 (Opacity Mode) ===
+    cyan:   { label: '赛博青', type: 'single', primary: '#22d3ee', gradient: ['#22d3ee', 'rgba(34, 211, 238, 0.1)'] },
+    purple: { label: '迷幻紫', type: 'single', primary: '#e879f9', gradient: ['#e879f9', 'rgba(232, 121, 249, 0.1)'] },
+    blue:   { label: '深海蓝', type: 'single', primary: '#3b82f6', gradient: ['#3b82f6', 'rgba(59, 130, 246, 0.1)'] },
+    green:  { label: '极光绿', type: 'single', primary: '#34d399', gradient: ['#34d399', 'rgba(52, 211, 153, 0.1)'] },
+    yellow: { label: '流光金', type: 'single', primary: '#facc15', gradient: ['#facc15', 'rgba(250, 204, 21, 0.1)'] },
+    red:    { label: '赤焰红', type: 'single', primary: '#f87171', gradient: ['#f87171', 'rgba(248, 113, 113, 0.1)'] },
+
+    // === ✅ [新增] 炫酷渐变色带 (Interpolation Mode) ===
+    // 1. 冰火之歌 (蓝 -> 红) 对比度极高
+    fire_ice: { 
+        label: '冰火 (蓝-红)', 
+        type: 'gradient', 
+        primary: '#f87171', 
+        gradient: ['#f87171', '#3b82f6'], // 柱状图上红下蓝
+        stops: ['#3b82f6', '#f87171'] // 地图 Low=蓝, High=红
+    },
+    // 2. 岩浆 (黑紫 -> 亮黄) 经典的 Heatmap 配色
+    magma: { 
+        label: '岩浆 (紫-黄)', 
+        type: 'gradient', 
+        primary: '#facc15', 
+        gradient: ['#facc15', '#6b21a8'], 
+        stops: ['#6b21a8', '#facc15'] 
+    },
+    // 3. 翠绿 (深蓝 -> 亮绿) 护眼且清晰
+    viridis: { 
+        label: '森岭 (蓝-绿)', 
+        type: 'gradient', 
+        primary: '#34d399', 
+        gradient: ['#34d399', '#1e3a8a'], 
+        stops: ['#1e3a8a', '#34d399'] 
+    },
+    // 4. 深海 (浅蓝 -> 深蓝) 单色相但明度跨度大
+    ocean: { 
+        label: '深海 (浅-深)', 
+        type: 'gradient', 
+        primary: '#0ea5e9', 
+        gradient: ['#0c4a6e', '#bae6fd'], 
+        stops: ['#bae6fd', '#0c4a6e'] // Low=浅, High=深
+    },
+    // 5. 赛博朋克 (蓝 -> 粉) 霓虹感
+    cyber: { 
+        label: '霓虹 (蓝-粉)', 
+        type: 'gradient', 
+        primary: '#e879f9', 
+        gradient: ['#e879f9', '#22d3ee'], 
+        stops: ['#22d3ee', '#e879f9'] 
+    }
+};
+// ✅ [新增] 高对比度对立色盘 (Low -> High)
+export const CONTRAST_PALETTES = [
+    ['#3b82f6', '#ef4444'], // 1. 经典冰火: 蓝 -> 红
+    ['#10b981', '#8b5cf6'], // 2. 毒液: 绿 -> 紫
+    ['#06b6d4', '#db2777'], // 3. 赛博: 青 -> 粉
+    ['#f59e0b', '#2563eb'], // 4. 逆光: 橙 -> 深蓝 (对比极强)
+    ['#84cc16', '#f43f5e'], // 5. 玫瑰: 酸橙 -> 玫红
+    ['#6366f1', '#fbbf24'], // 6. 暮光: 靛蓝 -> 琥珀
 ];
+// 为了兼容之前的代码，如果有地方用了 NEON_PALETTE，我们可以映射一下或者保留
+// 这里我们为了彻底的效果，把 NEON_PALETTE 指向新的色盘的主色，或者直接导出
+export const NEON_PALETTE = CONTRAST_PALETTES;
 
 const ChartOverlay: React.FC = () => {
     const { 
@@ -28,7 +93,11 @@ const ChartOverlay: React.FC = () => {
         // ✅ 引入联动状态
         isMapLinkageEnabled, setMapLinkageEnabled,
         highlightedCategory, // ✅ 必须解构出当前状态
-        setHighlightedCategory
+        setHighlightedCategory,
+        // ✅ 引入新状态
+        mapColorTheme, setMapColorTheme,
+        // ✅ [新增] 引入 activeColumn 相关 action
+        setActiveColumn
     } = useAnalysisStore();
 
     // 散点图数据源切换：'Pivoted'(透视结果) vs 'Raw'(原始数据)
@@ -62,56 +131,75 @@ const ChartOverlay: React.FC = () => {
     }, [pivotData, chartType, isChartVisible]);
 
     // ================= 📊 柱状图配置 =================
-    const getBarOption = () => {
+const getBarOption = () => {
         if (!pivotData) return {};
         const is2D = generatedColumns.length > 1 || (generatedColumns[0] !== 'value');
         const xAxisData = pivotData.map(item => item.rowKey);
         const dataLength = pivotData.length;
         const showScroll = dataLength > 8;
         
+        // ✅ [新增] 获取当前主题配置
+        const theme = THEME_COLORS[mapColorTheme];
+
         let series: any[] = [];
         if (!is2D) {
-            // 一维模式
+            // ✅ [修改] 一维模式：使用 mapColorTheme
             series.push({
                 name: pivotConfig.valueField || '统计值',
                 type: 'bar',
                 data: pivotData.map(item => item.value),
                 itemStyle: {
+                    // ✅ [修改] 使用主题色的渐变
                     color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                        { offset: 0, color: '#22d3ee' },
-                        { offset: 1, color: 'rgba(6, 182, 212, 0.05)' }
+                        { offset: 0, color: theme.gradient[0] }, // 亮色
+                        { offset: 1, color: theme.gradient[1] }  // 暗色/透明
                     ]),
                     borderRadius: [4, 4, 0, 0],
+                    // ✅ [新增] 增加一点发光质感
+                    shadowBlur: 5,
+                    shadowColor: theme.gradient[1]
+                },
+                // ✅ [新增] 高亮样式：点击或 hover 时变亮
+                emphasis: {
+                     itemStyle: {
+                        color: theme.primary,
+                        shadowBlur: 15,
+                        shadowColor: theme.primary
+                     }
                 },
                 barMaxWidth: 50,
             });
         } else {
-            // 二维模式
+            // ✅ [修改] 二维模式：使用 CONTRAST_PALETTES 进行双色渐变渲染
             series = generatedColumns.map((colKey, index) => {
-                const colorPair = NEON_PALETTE[index % NEON_PALETTE.length];
+                // 获取对应的对立色对 [Low, High]
+                const palette = CONTRAST_PALETTES[index % CONTRAST_PALETTES.length];
+                const [lowColor, highColor] = palette;
+
                 return {
                     name: colKey,
                     type: 'bar',
                     data: pivotData.map(row => row[colKey] || 0),
                     barMaxWidth: 30,
-                    
-                    // ✅ 核心修复：找回高亮交互功能
                     emphasis: { 
-                        focus: 'series', // 聚焦当前系列，淡化其他系列
-                        blurScope: 'coordinateSystem', // 在整个坐标系内淡化
-                        itemStyle: {
-                            shadowBlur: 15,
-                            shadowColor: colorPair[0], // 高亮时增加同色系发光
-                            borderColor: '#fff', // 增加白色描边提升对比度
-                            borderWidth: 1
+                        focus: 'series', blurScope: 'coordinateSystem', 
+                        itemStyle: { 
+                            shadowBlur: 15, 
+                            shadowColor: highColor, // 高亮用暖色
+                            borderColor: '#fff', 
+                            borderWidth: 1 
                         }
                     },
-
                     itemStyle: {
+                        // 纵向渐变：底部冷色 -> 顶部暖色
                         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                            { offset: 0, color: colorPair[0] }, { offset: 1, color: colorPair[1] }
+                            { offset: 0, color: highColor }, // Top
+                            { offset: 1, color: lowColor }   // Bottom
                         ]),
                         borderRadius: [2, 2, 0, 0],
+                        // 给个边框让渐变更明显
+                        borderColor: 'rgba(255,255,255,0.1)',
+                        borderWidth: 1
                     }
                 };
             });
@@ -129,17 +217,17 @@ const ChartOverlay: React.FC = () => {
     };
 
     // ================= 🕸️ 雷达图配置 (无警告版) =================
-    const getRadarOption = () => {
+const getRadarOption = () => {
         if (!pivotData) return {};
         const is2D = generatedColumns.length > 1 || (generatedColumns[0] !== 'value');
         let indicators: { name: string, max?: number }[] = [];
         let seriesData: any[] = [];
+        
+        // ✅ [新增] 获取当前主题色
+        const theme = THEME_COLORS[mapColorTheme];
 
         if (is2D) {
-            indicators = generatedColumns.map(col => ({ 
-                name: col,
-                // max: undefined // 自动
-            }));
+            indicators = generatedColumns.map(col => ({ name: col }));
             seriesData = pivotData!.slice(0, 10).map((row) => ({
                 value: generatedColumns.map(col => row[col] || 0),
                 name: row.rowKey
@@ -148,7 +236,6 @@ const ChartOverlay: React.FC = () => {
             const values = pivotData!.map(item => Number(item.value || 0));
             const maxVal = Math.max(...values);
             const safeMax = maxVal > 0 ? Math.ceil(maxVal * 1.1) : 10;
-
             const displayData = pivotData!.slice(0, 12); 
             indicators = displayData.map(item => ({
                 name: String(item.rowKey).substring(0, 8),
@@ -164,52 +251,35 @@ const ChartOverlay: React.FC = () => {
             backgroundColor: 'transparent',
             tooltip: { trigger: 'item', backgroundColor: 'rgba(0,0,0,0.8)', borderColor: 'rgba(255,255,255,0.2)', textStyle: { color: '#fff' } },
             legend: {
-                show: true,
-                type: 'scroll',
-                bottom: 5,
-                textStyle: { color: '#e5e7eb' },
-                pageIconColor: '#22d3ee',
+                show: true, type: 'scroll', bottom: 5, textStyle: { color: '#e5e7eb' },
+                pageIconColor: theme.primary, // ✅ 使用主题色
                 pageTextStyle: { color: '#9ca3af' }
             },
             radar: {
                 indicator: indicators,
                 shape: 'polygon',
-                // ✅ 保持：移除 splitNumber，隐藏标签，解决警告
                 axisName: {
-                    color: '#22d3ee',
-                    fontSize: 12,
-                    fontWeight: 'bold',
-                    textShadowColor: 'rgba(0,0,0,0.5)',
-                    textShadowBlur: 2
+                    color: is2D ? '#22d3ee' : theme.primary, // ✅ 使用主题色
+                    fontSize: 12, fontWeight: 'bold', textShadowColor: 'rgba(0,0,0,0.5)', textShadowBlur: 2
                 },
-                axisLabel: { show: false },
-                axisTick: { show: false },
+                axisLabel: { show: false }, axisTick: { show: false },
                 splitLine: {
                     lineStyle: {
                         color: [
-                            'rgba(34, 211, 238, 0.1)', 
-                            'rgba(34, 211, 238, 0.2)',
-                            'rgba(34, 211, 238, 0.3)',
-                            'rgba(34, 211, 238, 0.4)',
-                            'rgba(34, 211, 238, 0.5)', 
+                            'rgba(255, 255, 255, 0.05)', 
+                            'rgba(255, 255, 255, 0.1)'
                         ].reverse()
                     }
                 },
-                splitArea: {
-                    show: true,
-                    areaStyle: {
-                        color: ['rgba(255, 255, 255, 0.02)', 'rgba(255, 255, 255, 0.05)']
-                    }
-                },
-                axisLine: {
-                    lineStyle: { color: 'rgba(255, 255, 255, 0.1)' }
-                }
+                splitArea: { show: true, areaStyle: { color: ['rgba(255, 255, 255, 0.02)', 'rgba(255, 255, 255, 0.05)'] } },
+                axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } }
             },
             series: [{
                 name: 'Data Analysis',
                 type: 'radar',
                 data: seriesData.map((item, index) => {
-                    const color = is2D ? NEON_PALETTE[index % NEON_PALETTE.length][0] : '#22d3ee';
+                    // ✅ [修改] 一维模式使用主题色
+                    const color = is2D ? NEON_PALETTE[index % NEON_PALETTE.length][0] : theme.primary;
                     return {
                         ...item,
                         itemStyle: { color: color },
@@ -299,17 +369,27 @@ const ChartOverlay: React.FC = () => {
             case 'Scatter': return getScatterOption(); 
             case 'Bar': default: return getBarOption();
         }
-    }, [pivotData, rawScatterData, chartType, scatterSource, scatterConfig, generatedColumns, pivotConfig, isChartVisible]); 
+    }, [pivotData, rawScatterData, chartType, scatterSource, scatterConfig, generatedColumns, pivotConfig, isChartVisible, mapColorTheme]); 
 
-    // ✅ 定义点击事件处理
+// ✅ [新增] 点击事件处理
     const onChartClick = (params: any) => {
         if (!isMapLinkageEnabled) return;
+        
+        console.log('Chart Click:', params);
 
-        // params.name 通常对应 X 轴类别 (即 rowKey)
+        // 1. 处理行联动 (Category / Row)
+        // params.name 对应 rowKey (X轴)
         if (params.name) {
-            // ✅ 修正：直接使用解构出来的 highlightedCategory 进行判断，而不是使用回调
             const nextCategory = highlightedCategory === params.name ? null : params.name;
             setHighlightedCategory(nextCategory);
+        }
+
+        // 2. 处理列联动 (Series / Column)
+        // params.seriesName 对应列名 (Legend)
+        // 只有在二维模式下 (generatedColumns > 0) 才处理
+        if (params.seriesName && generatedColumns.includes(params.seriesName)) {
+            // 设置当前激活的列，地图颜色将随之改变
+            setActiveColumn(params.seriesName);
         }
     };
     
@@ -319,6 +399,9 @@ const ChartOverlay: React.FC = () => {
     };
 
     if (!isChartVisible) return null;
+    
+    // ✅ [新增] 判断是否显示色系选择器：开启联动 && 一维透视
+    const showThemeSelect = isMapLinkageEnabled && pivotData && !pivotConfig.groupByCol && pivotConfig.groupByRow;
 
     return (
         <div 
@@ -345,6 +428,33 @@ const ChartOverlay: React.FC = () => {
                         onChange={setChartType}
                         className="custom-segmented-glass"
                     />
+
+                    {/* ✅ 色系选择器 (UI 优化：显示渐变色条) */}
+                    {showThemeSelect && (
+                         <Select
+                            size="small"
+                            variant="borderless"
+                            value={mapColorTheme}
+                            onChange={setMapColorTheme}
+                            popupMatchSelectWidth={false}
+                            className="w-28 ml-2"
+                            options={Object.entries(THEME_COLORS).map(([key, conf]) => ({
+                                label: (
+                                    <div className="flex items-center gap-2">
+                                        {/* 显示色条预览 */}
+                                        <div className="w-4 h-2 rounded-xs" style={{ 
+                                            background: conf.type === 'gradient' 
+                                                ? `linear-gradient(to right, ${conf.stops![0]}, ${conf.stops![1]})`
+                                                : conf.primary 
+                                        }}></div>
+                                        <span className="text-gray-300 text-xs">{conf.label}</span>
+                                    </div>
+                                ),
+                                value: key
+                            }))}
+                         />
+                    )}
+
                 </div>
 
                 {/* ✅ 中间：散点图数据源切换 (仅在 Scatter 模式下显示) */}
@@ -362,7 +472,7 @@ const ChartOverlay: React.FC = () => {
                         />
                     )}
                 </div>
-
+                
                 <Button 
                     type="text" shape="circle" icon={<CloseOutlined className="text-gray-300 hover:text-white" />} 
                     onClick={() =>{
@@ -385,20 +495,20 @@ const ChartOverlay: React.FC = () => {
                 />
             </div>
 
-            {/* 3. Footer */}
+            {/* Footer */}
             <div className="h-10 shrink-0 flex items-center justify-between px-4 border-t border-white/5 bg-white/5 text-xs text-gray-300">
                 <div className="flex items-center gap-2 font-medium">
-                    {/* ✅ 根据 store 状态改变颜色 */}
+                    {/* ✅ [修改] 联动状态指示灯 */}
                     <EnvironmentOutlined className={isMapLinkageEnabled ? 'text-cyan-400' : 'text-gray-400'} />
                     <span>地图颜色映射联动</span>
                 </div>
-                {/* ✅ 使用 store 的 action */}
+                {/* ✅ [修改] 绑定 store 状态 */}
                 <Switch 
                     size="small" 
                     checked={isMapLinkageEnabled} 
                     onChange={(checked) => {
                         setMapLinkageEnabled(checked);
-                        if(!checked) setHighlightedCategory(null); // 关闭联动时清除高亮
+                        if(!checked) setHighlightedCategory(null);
                     }} 
                     className="bg-gray-500/50" 
                 />

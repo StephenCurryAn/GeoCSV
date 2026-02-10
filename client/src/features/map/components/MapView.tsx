@@ -3,7 +3,7 @@ import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { bbox } from '@turf/turf';
 import { Button, Tooltip, App, Checkbox, Spin, Select, ConfigProvider, theme, Space, Typography } from 'antd'; // 引入 Ant Design
-import ChartOverlay from './ChartOverlay';
+import ChartOverlay, { THEME_COLORS, CONTRAST_PALETTES } from './ChartOverlay';
 import { geoService } from '../../../services/geoService';
 import { BarChartOutlined } from '@ant-design/icons';
 import { useAnalysisStore } from '../../../stores/useAnalysisStore'
@@ -30,6 +30,35 @@ const COLOR_SCHEMES = {
     reds: { name: '火焰红 (Reds)', colors: ['#fff5f0', '#fee0d2', '#fcbba1', '#fc9272', '#fb6a4a', '#ef3b2c', '#cb181d', '#99000d'] },
     // reds: { name: '火焰红 (Reds)', colors: ['#fff5f0', '#99000d'] },
 };
+
+// ✅ [新增] 颜色插值辅助函数 (Hex -> RGB -> Interpolate -> Hex)
+// 简单的线性插值，用于在JS端计算颜色
+function hexToRgb(hex: string) {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result ? {
+        r: parseInt(result[1], 16),
+        g: parseInt(result[2], 16),
+        b: parseInt(result[3], 16)
+    } : { r: 0, g: 0, b: 0 };
+}
+
+function componentToHex(c: number) {
+    const hex = Math.round(c).toString(16);
+    return hex.length === 1 ? "0" + hex : hex;
+}
+
+function rgbToHex(r: number, g: number, b: number) {
+    return "#" + componentToHex(r) + componentToHex(g) + componentToHex(b);
+}
+
+function interpolateColor(color1: string, color2: string, factor: number) {
+    const c1 = hexToRgb(color1);
+    const c2 = hexToRgb(color2);
+    const r = c1.r + (c2.r - c1.r) * factor;
+    const g = c1.g + (c2.g - c1.g) * factor;
+    const b = c1.b + (c2.b - c1.b) * factor;
+    return rgbToHex(r, g, b);
+}
 
 // 2. 预设底图样式 (Basemaps)
 const BASEMAPS = [
@@ -85,16 +114,6 @@ const BASEMAPS = [
     }
 ];
 
-// ✅ 复制一份 Neon 色盘 (为了保持颜色一致，或者你可以把它抽离到一个单独的 constants 文件)
-const NEON_PALETTE_COLORS = [
-    '#22d3ee', // 青
-    '#e879f9', // 紫
-    '#3b82f6', // 蓝
-    '#34d399', // 绿
-    '#facc15', // 黄
-    '#f87171', // 红
-];
-
 const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeature, onFeatureClick }) => {
     // ✅ 修改 2: 获取上下文感知的 message 实例
     // 注意：MapView 必须被包裹在 <App> 组件中（通常在 main.tsx 或 App.tsx 已经包了）
@@ -125,6 +144,14 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
     const displayDataRef = useRef(displayData);
     // ✅每次组件渲染时，都更新 ref 的值为最新的 displayData
     displayDataRef.current = displayData;
+
+    // ✅ [新增] 获取 Store 状态
+    const { isChartVisible, setChartVisible, generatedColumns,
+        pivotData, pivotConfig, // 数据
+        isMapLinkageEnabled, highlightedCategory, mapColorTheme,// 联动状态
+        // ✅ [新增] 获取 activeColumn
+        activeColumn 
+    } = useAnalysisStore();
 
     // ✅切换文件时的自动清理逻辑
     useEffect(() => {
@@ -177,13 +204,6 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
             setAllData(null); // 设置为 null，垃圾回收会介入
         }
     };
-
-    // ✅ 2. 获取 store 控制开关
-    const { 
-            isChartVisible, setChartVisible, 
-            pivotData, pivotConfig, // 数据
-            isMapLinkageEnabled, highlightedCategory // 联动状态
-        } = useAnalysisStore();
 
     // 初始化地图
     useEffect(() => {
@@ -238,22 +258,25 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
         }
     }, [displayData]);
 
-    /**
-     * 核心渲染逻辑：只负责 Geometry 和基础图层架构
-     * ✅纯粹的渲染函数 (移除底部的事件绑定代码)
+/**
+     * ✅ [修改] 核心渲染逻辑：只负责 Geometry 和基础图层架构
+     * (移除了底部的 map.on 事件绑定，防止重复)
      */
     const renderGeoJSON = (geoJSON: any) => {
         const map = mapInstance.current;
-        if (!map) return;
-        // map.isStyleLoaded是MapLibre GL JS（以及 Mapbox GL JS）地图实例自带的一个原生方法（API）
-        // 表示地图样式是否完全加载好
-        // if (!map.style || !map.isStyleLoaded()) return; // 简化的卫兵
-        if (!map.getStyle()) return;
+        if (!map || !map.getStyle()) return;
 
         const sourceId = 'uploaded-geo-data';
 
-        // 清理旧图层
-        const layersToRemove = ['geo-fill-layer', 'geo-line-layer', 'geo-point-layer', 'geo-highlight-fill', 'geo-highlight-line', 'geo-highlight-point'];
+        // 清理旧图层 (注意名字变了)
+        const layersToRemove = [
+            'geo-fill-layer', 
+            'geo-polygon-border', // ✅ 新图层名
+            'geo-linestring-main', // ✅ 新图层名
+            'geo-line-layer', // 旧图层名(兼容清理)
+            'geo-point-layer', 
+            'geo-highlight-fill', 'geo-highlight-line', 'geo-highlight-point'
+        ];
         layersToRemove.forEach(layer => {
             if (map.getLayer(layer)) map.removeLayer(layer);
         });
@@ -262,142 +285,100 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
         // 添加数据源
         map.addSource(sourceId, { type: 'geojson', data: geoJSON });
 
-        // 1. 填充层 (基础样式，颜色会被 updateChoroplethColors 覆盖)
+        // 1. 填充层
         map.addLayer({
-            id: 'geo-fill-layer',
-            type: 'fill',
-            source: sourceId,
-            paint: {
-                'fill-color': '#00e5ff', // 默认颜色
-                'fill-opacity': 0.6      // 稍微提高不透明度以便看清色斑
+            id: 'geo-fill-layer', type: 'fill', source: sourceId,
+            paint: { 'fill-color': '#00e5ff', 'fill-opacity': 0.6 },
+            filter: ['==', '$type', 'Polygon']
+        });
+        // 2. ✅ 面边框图层 (Polygon Border) - 只渲染 Polygon 的轮廓
+        // 它的任务是：高亮时变白，不参与颜色映射
+        map.addLayer({
+            id: 'geo-polygon-border', type: 'line', source: sourceId,
+            paint: { 
+                'line-color': '#a5f3fc', 
+                'line-width': 1, 
+                'line-opacity': 0.5 
             },
-            // ✅增加过滤器，只允许 Geometry 类型为 Polygon 的要素显示
-            // 这样 LineString 就不会被强制渲染成闭合的面了
             filter: ['==', '$type', 'Polygon']
         });
 
-        // 2. 边框层
+        // 3. ✅ 线实体图层 (LineString Main) - 只渲染 LineString
+        // 它的任务是：像面一样展示炫酷的渐变色
         map.addLayer({
-            id: 'geo-line-layer',
-            type: 'line',
-            source: sourceId,
-            paint: {
-                'line-color': activeBasemap === 'light' ? '#666' : '#a5f3fc', // 根据底图调整边框色
-                'line-width': 2, // 稍微加粗一点让线更明显
-                'line-opacity': 0.8
+            id: 'geo-linestring-main', type: 'line', source: sourceId,
+            paint: { 
+                'line-color': '#00e5ff', 
+                'line-width': 3, // 默认粗一点，更有质感
+                'line-opacity': 0.8,
+                'line-blur': 1   // 加一点模糊，做出霓虹灯管效果
             },
-            // ✅只渲染 面(边框) 和 线
-            filter: ['any', ['==', '$type', 'Polygon'], ['==', '$type', 'LineString']]
+            filter: ['==', '$type', 'LineString']
         });
 
-        // 3. 点图层 (新增)
+        // 3. 点图层
         map.addLayer({
-            id: 'geo-point-layer',
-            type: 'circle',
-            source: sourceId,
-            paint: {
-                'circle-radius': 6,
-                'circle-color': '#00e5ff', // 默认颜色
-                'circle-stroke-width': 1,
-                'circle-stroke-color': '#ffffff'
-            },
+            id: 'geo-point-layer', type: 'circle', source: sourceId,
+            paint: { 'circle-radius': 6, 'circle-color': '#00e5ff', 'circle-stroke-width': 1, 'circle-stroke-color': '#ffffff' },
             filter: ['==', '$type', 'Point']
         });
+        // 高亮层 (略，保持原样)
+        map.addLayer({ id: 'geo-highlight-fill', type: 'fill', source: sourceId, paint: { 'fill-color': '#ffffff', 'fill-opacity': 0.2 }, filter: ['==', 'id', 'nothing-selected'] });
+        map.addLayer({ id: 'geo-highlight-line', type: 'line', source: sourceId, paint: { 'line-color': '#ffffff', 'line-width': 3 }, filter: ['==', 'id', 'nothing-selected'] });
+        map.addLayer({ id: 'geo-highlight-point', type: 'circle', source: sourceId, paint: { 'circle-radius': 8, 'circle-color': '#ffffff', 'circle-stroke-width': 2, 'circle-stroke-color': '#ff0000' }, filter: ['==', 'id', 'nothing-selected'] });
 
-        // 3. 高亮层 (保持原样)
-        map.addLayer({
-            id: 'geo-highlight-fill',
-            type: 'fill',
-            source: sourceId,
-            paint: {
-                'fill-color': '#ffffff',
-                'fill-opacity': 0.2
-            },
-            // 默认在最开始只显示id为nothing-selected（不会有）的图层，等后续点击之后再显示点击的图层
-            filter: ['==', 'id', 'nothing-selected']
-        });
-        map.addLayer({
-            id: 'geo-highlight-line',
-            type: 'line',
-            source: sourceId,
-            paint: {
-                'line-color': '#ffffff',
-                'line-width': 3
-            },
-            filter: ['==', 'id', 'nothing-selected']
-        });
-
-        // 点高亮 (新增)
-        map.addLayer({
-            id: 'geo-highlight-point',
-            type: 'circle',
-            source: sourceId,
-            paint: {
-                'circle-radius': 8,
-                'circle-color': '#ffffff', // 高亮为白色
-                'circle-stroke-width': 2,
-                'circle-stroke-color': '#ff0000'
-            },
-            filter: ['==', 'id', 'nothing-selected']
-        });
-
-        // 只有当文件名变化时，才重新调整视野
         if (fileName !== lastFileNameRef.current) {
             try {
-                // bbox计算该 GeoJSON 数据的“最小外接矩形”
                 const bounds = bbox(geoJSON) as [number, number, number, number];
                 map.fitBounds(bounds, { padding: 50, maxZoom: 14, duration: 1500 });
-                lastFileNameRef.current = fileName; // 更新记录
+                lastFileNameRef.current = fileName; 
             } catch(e) { console.warn('BBox calc failed', e) }
         }
-        // ❌ 删除这里的 map.on(...) 代码块
     };
 
-    // 2. ✅ 新增：单独的 Effect 处理事件绑定 (只运行一次)
+/**
+     * ✅ [新增] 专门的 Effect 处理事件绑定 (只运行一次或当 isMapLoaded 变时)
+     * 解决了重复绑定导致的性能问题
+     */
     useEffect(() => {
         const map = mapInstance.current;
-        if (!map) return;
+        if (!map || !isMapLoaded) return;
 
-        // 定义交互图层 ID
-        const interactiveLayers = ['geo-fill-layer', 'geo-line-layer', 'geo-point-layer'];
+        // 监听列表更新
+        const interactiveLayers = [
+            'geo-fill-layer', 
+            'geo-polygon-border', 
+            'geo-linestring-main', // ✅
+            'geo-point-layer'
+        ];
 
-        // 定义点击回调 (抽离出来)
         const handleClick = (e: any) => {
             if (e.features && e.features.length > 0) {
                 const feature = e.features[0];
                 const props = feature.properties;
-                
-                // 处理 cp
-                if (typeof props.cp === 'string') {
-                    try { props.cp = JSON.parse(props.cp); } catch (err) {}
-                }
+                // ... (props.cp 处理逻辑保持不变)
+                if (typeof props.cp === 'string') { try { props.cp = JSON.parse(props.cp); } catch (err) {} }
                 if (!props.cp || !Array.isArray(props.cp)) {
                     if (feature.geometry.type === 'Point') {
-                        // @ts-ignore
+                         // @ts-ignore
                         props.cp = feature.geometry.coordinates;
-                    } else {
-                        props.cp = [e.lngLat.lng, e.lngLat.lat];
-                    }
+                    } else { props.cp = [e.lngLat.lng, e.lngLat.lat]; }
                 }
-                
-                // 调用父组件传入的回调
                 if (onFeatureClick) onFeatureClick(props);
             }
         };
 
-        // 定义鼠标样式回调
         const handleMouseEnter = () => map.getCanvas().style.cursor = 'pointer';
         const handleMouseLeave = () => map.getCanvas().style.cursor = '';
 
-        // 绑定事件
-        // 注意：即使图层此时不存在，MapLibre 也会注册监听器，一旦图层出现就会生效
+        // 绑定
         interactiveLayers.forEach(layerId => {
             map.on('click', layerId, handleClick);
             map.on('mouseenter', layerId, handleMouseEnter);
             map.on('mouseleave', layerId, handleMouseLeave);
         });
 
-        // ✅ 清理函数：组件卸载时移除监听器，防止内存泄漏
+        // 清理
         return () => {
             interactiveLayers.forEach(layerId => {
                 map.off('click', layerId, handleClick);
@@ -405,105 +386,233 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                 map.off('mouseleave', layerId, handleMouseLeave);
             });
         };
-    }, [isMapLoaded]); // 依赖 isMapLoaded 确保 mapInstance 存在即可
+    }, [isMapLoaded]); // 只依赖 isMapLoaded
 
-    /**
-     * ✅ 新增：处理联动颜色映射的核心函数
-     */
+
+    // ✅ [修改] 核心联动着色逻辑：增强高亮对比度
     const updateLinkageColors = () => {
         const map = mapInstance.current;
-        if (!map || !map.getLayer('geo-fill-layer')) return;
+        // 卫兵：只要没有核心图层就退出
+        if (!map || (!map.getLayer('geo-fill-layer') && !map.getLayer('geo-linestring-main'))) return;
+        
+        const isPivotMode = isMapLinkageEnabled && pivotData && pivotData.length > 0;
+        const isScenario1 = isPivotMode && !pivotConfig.groupByCol && pivotConfig.groupByRow; 
+        const isScenario2 = isPivotMode && pivotConfig.groupByCol && pivotConfig.groupByRow; 
 
-        // 1. 基本校验：必须开启联动、有透视数据、只选了行没选列 (Condition 1)
-        const isCategoricalMode = isMapLinkageEnabled && pivotData && pivotData.length > 0 && !pivotConfig.groupByCol && pivotConfig.groupByRow;
+        if (isScenario1 || isScenario2) {
+            const rowField = pivotConfig.groupByRow!;
+            let targetValues: number[] = [];
+            
+            let useGradient = false;
+            let gradStart = '#000';
+            let gradEnd = '#fff';
+            let singleColor = '#00e5ff';
+            
+            const themeConfig = THEME_COLORS[mapColorTheme];
 
-        if (isCategoricalMode) {
-            const rowField = pivotConfig.groupByRow!; // 比如 "Province"
+            if (isScenario1) {
+                targetValues = pivotData!.map(d => Number(d.value));
+                if (themeConfig.type === 'gradient' && themeConfig.stops) {
+                    useGradient = true;
+                    gradStart = themeConfig.stops[0];
+                    gradEnd = themeConfig.stops[1];
+                } else {
+                    useGradient = false;
+                    singleColor = themeConfig.primary;
+                }
+            } else if (isScenario2) {
+                const targetCol = (activeColumn && generatedColumns.includes(activeColumn)) 
+                    ? activeColumn 
+                    : generatedColumns[0];
+                const colIndex = generatedColumns.indexOf(targetCol);
+                const safeIndex = colIndex >= 0 ? colIndex : 0;
+                const palette = CONTRAST_PALETTES[safeIndex % CONTRAST_PALETTES.length];
+                
+                useGradient = true;
+                gradStart = palette[0];
+                gradEnd = palette[1];
+                targetValues = pivotData!.map(d => Number(d[targetCol] || 0));
+                
+                console.log(`🔗 联动渲染: Col=${targetCol}, Mode=${useGradient ? 'Gradient' : 'Single'}`);
+            }
+
+            const minVal = Math.min(...targetValues);
+            const maxVal = Math.max(...targetValues);
+            const range = maxVal - minVal;
+
+            // 1. 颜色 & 透明度 (适用于 Fill 和 LineMain)
+            const colorMatch: any[] = ['match', ['get', rowField]];
+            const opacityMatch: any[] = ['match', ['get', rowField]];
             
-            // --- A. 构建颜色表达式 (Categorical Match) ---
-            // 语法: ['match', ['get', field], val1, color1, val2, color2, defaultColor]
-            const colorExpression: any[] = ['match', ['get', rowField]];
-            
+            // 2. 边框逻辑 (适用于 PolygonBorder)
+            const borderStrokeWidthMatch: any[] = ['match', ['get', rowField]];
+            const borderStrokeColorMatch: any[] = ['match', ['get', rowField]];
+
+            // 3. ✅ 线宽逻辑 (适用于 LineMain)
+            // 线数据需要通过宽度变化来增强高亮效果
+            const mainLineWidthMatch: any[] = ['match', ['get', rowField]];
+
+            // 3. ✅ [新增] 点描边属性 (Point Stroke)
+            const pointStrokeWidthMatch: any[] = ['match', ['get', rowField]];
+            const pointStrokeColorMatch: any[] = ['match', ['get', rowField]];
+            const pointRadiusMatch: any[] = ['match', ['get', rowField]]; // 顺便把半径也放到 match 里
+
             pivotData!.forEach((item, index) => {
-                const color = NEON_PALETTE_COLORS[index % NEON_PALETTE_COLORS.length];
-                colorExpression.push(item.rowKey); // 数据值 (例如 "Jiangsu")
-                colorExpression.push(color);       // 对应的霓虹色
+                const val = targetValues[index]; 
+                let normalized = 0.5;
+                if (range > 0) normalized = (val - minVal) / range;
+
+                let calculatedColor: string;
+                let calculatedOpacity: number;
+
+                if (useGradient) {
+                    calculatedColor = interpolateColor(gradStart, gradEnd, normalized);
+                    calculatedOpacity = 0.8; 
+                } else {
+                    calculatedColor = singleColor;
+                    calculatedOpacity = 0.2 + (normalized * 0.7); 
+                }
+
+                const isSelected = highlightedCategory === item.rowKey;
+                const hasActiveSelection = !!highlightedCategory;
+
+                let finalColor = calculatedColor;
+                let finalOpacity = calculatedOpacity;
+                
+                // Polygon Border Params
+                let finalBorderWidth = 1;
+                let finalBorderColor = 'rgba(255,255,255,0.3)';
+                
+                // ✅ Line Main Params
+                let finalLineWidth = 3; // 默认线宽
+
+                // ✅ Point Params (默认值)
+                let finalPointRadius = 6;
+                let finalPointStrokeWidth = 1;
+                let finalPointStrokeColor = '#ffffff';
+
+                if (hasActiveSelection) {
+                    if (isSelected) {
+                        // 选中: 颜色最亮，完全不透明
+                        finalColor = calculatedColor;
+                        finalOpacity = 1.0;
+                        
+                        // Polygon: 白边框加粗
+                        finalBorderWidth = 4;
+                        finalBorderColor = '#ffffff';
+
+                        // ✅ Line: 线条加粗
+                        finalLineWidth = 6; 
+
+                        // ✅ Point: 变大，白边框加粗
+                        finalPointRadius = 10;
+                        finalPointStrokeWidth = 3;
+                        finalPointStrokeColor = '#ffffff';
+                    } else {
+                        // 未选中: 颜色不变(保留上下文)，但变暗
+                        finalColor = calculatedColor;
+                        finalOpacity = 0.3; 
+                        
+                        // Polygon: 边框隐去
+                        finalBorderWidth = 1;
+                        finalBorderColor = 'rgba(255,255,255,0.1)';
+
+                        // ✅ Line: 线条变细
+                        finalLineWidth = 2;
+
+                        // ✅ Point: 变小，边框几乎隐形
+                        finalPointRadius = 4; // 稍微变小一点，退居次要位置
+                        finalPointStrokeWidth = 1;
+                        finalPointStrokeColor = 'rgba(255,255,255,0.1)'; // 关键：把边框也变暗！
+                    }
+                }
+
+                colorMatch.push(item.rowKey, finalColor);
+                opacityMatch.push(item.rowKey, finalOpacity);
+                
+                borderStrokeWidthMatch.push(item.rowKey, finalBorderWidth);
+                borderStrokeColorMatch.push(item.rowKey, finalBorderColor);
+                
+                mainLineWidthMatch.push(item.rowKey, finalLineWidth);
+
+                // Push Point Params
+                pointRadiusMatch.push(item.rowKey, finalPointRadius);
+                pointStrokeWidthMatch.push(item.rowKey, finalPointStrokeWidth);
+                pointStrokeColorMatch.push(item.rowKey, finalPointStrokeColor);
             });
+
+            // Defaults
+            colorMatch.push('#374151');
+            opacityMatch.push(0.1);
+            borderStrokeWidthMatch.push(1);
+            borderStrokeColorMatch.push('rgba(255,255,255,0.1)');
+            mainLineWidthMatch.push(1);
             
-            colorExpression.push('#6b7280'); // Default color (灰色) 如果匹配不到
-
-            // --- B. 构建高亮/透明度表达式 (Highlight Opacity) ---
-            let opacityExpression: any = 0.8; // 默认不透明度
-
-            if (highlightedCategory) {
-                // 如果有高亮项：选中的保持 0.8~1，没选中的变暗 (0.1)
-                opacityExpression = [
-                    'case',
-                    ['==', ['get', rowField], highlightedCategory],
-                    0.9, // 选中
-                    0.1  // 未选中 (变暗)
-                ];
-            }
-
-            // --- C. 构建线框宽度表达式 (Highlight Stroke) ---
-            let lineWidthExpression: any = 2;
-            if (highlightedCategory) {
-                lineWidthExpression = [
-                    'case',
-                    ['==', ['get', rowField], highlightedCategory],
-                    4, // 选中加粗
-                    1
-                ];
-            }
-
-            // 应用样式
-            map.setPaintProperty('geo-fill-layer', 'fill-color', colorExpression);
-            map.setPaintProperty('geo-fill-layer', 'fill-opacity', opacityExpression);
+            // 点默认值
+            pointRadiusMatch.push(4);               // 默认半径 (未选中时变小)
+            pointStrokeWidthMatch.push(0);          // 默认描边宽度 (无描边)
+            pointStrokeColorMatch.push('rgba(255,255,255,0)'); // 默认描边颜色 (透明)
             
-            // 只有在联动模式下，才去控制线框颜色以匹配填充色（或者保持白色高亮）
-            map.setPaintProperty('geo-line-layer', 'line-width', lineWidthExpression);
-            // 让线框颜色也稍微跟随一下，或者保持亮色
-            if (highlightedCategory) {
-                 map.setPaintProperty('geo-line-layer', 'line-color', [
-                    'case',
-                    ['==', ['get', rowField], highlightedCategory],
-                    '#ffffff', // 选中变白
-                    '#4b5563'  // 未选中变灰
-                 ]);
-            } else {
-                 map.setPaintProperty('geo-line-layer', 'line-color', 'rgba(255,255,255,0.3)');
-            }
+            // ============ 应用属性 ============
 
-            // 针对点图层 (geo-point-layer) 的处理
-            if (map.getLayer('geo-point-layer')) {
-                map.setPaintProperty('geo-point-layer', 'circle-color', colorExpression);
-                map.setPaintProperty('geo-point-layer', 'circle-opacity', opacityExpression);
-                map.setPaintProperty('geo-point-layer', 'circle-radius', 
-                    highlightedCategory ? 
-                    ['case', ['==', ['get', rowField], highlightedCategory], 10, 4] : 
-                    6
-                );
-            }
+            // 1. Polygon Fill (面填充)
+            map.setPaintProperty('geo-fill-layer', 'fill-color', colorMatch);
+            map.setPaintProperty('geo-fill-layer', 'fill-opacity', opacityMatch);
 
-            console.log(`🔗 联动模式: Field=${rowField}, Highlight=${highlightedCategory}`);
+            // 2. Polygon Border (面边框) - 使用 Border 逻辑
+            map.setPaintProperty('geo-polygon-border', 'line-width', borderStrokeWidthMatch);
+            map.setPaintProperty('geo-polygon-border', 'line-color', borderStrokeColorMatch);
+
+            // 3. ✅ LineString Main (线实体) - 使用 Fill 颜色逻辑 + LineWidth 逻辑
+            // 这样线数据就拥有了和面一样的渐变色！
+            map.setPaintProperty('geo-linestring-main', 'line-color', colorMatch);
+            map.setPaintProperty('geo-linestring-main', 'line-opacity', opacityMatch);
+            map.setPaintProperty('geo-linestring-main', 'line-width', mainLineWidthMatch);
+
+            // ✅ 4. Point (点) - 应用所有属性
+             if (map.getLayer('geo-point-layer')) {
+                 map.setPaintProperty('geo-point-layer', 'circle-color', colorMatch);
+                 map.setPaintProperty('geo-point-layer', 'circle-opacity', opacityMatch);
+                 // 应用半径、描边宽、描边色
+                 map.setPaintProperty('geo-point-layer', 'circle-radius', pointRadiusMatch);
+                 map.setPaintProperty('geo-point-layer', 'circle-stroke-width', pointStrokeWidthMatch);
+                 map.setPaintProperty('geo-point-layer', 'circle-stroke-color', pointStrokeColorMatch);
+             }
 
         } else {
-            // 如果联动关闭，或者是二维透视 (Situation 2)，或者是普通模式
-            // 回退到原有的 updateChoroplethColors 逻辑
-            // 这里我们手动调用一下原来的逻辑来恢复
-            // 但原来的逻辑依赖 activeField 和 activeScheme
-            updateChoroplethColors(); 
-            
-            // 恢复默认透明度和线宽
-            map.setPaintProperty('geo-fill-layer', 'fill-opacity', 0.6);
-            map.setPaintProperty('geo-line-layer', 'line-width', 2);
-            map.setPaintProperty('geo-line-layer', 'line-color', activeBasemap === 'light' ? '#666' : '#a5f3fc');
-            
-            if (map.getLayer('geo-point-layer')) {
-                map.setPaintProperty('geo-point-layer', 'circle-color', '#00e5ff');
-                map.setPaintProperty('geo-point-layer', 'circle-opacity', 1);
-                map.setPaintProperty('geo-point-layer', 'circle-radius', 6);
-            }
+            // ✅ [修复] 回退逻辑 (当不满足联动条件时)
+             // 必须操作新图层，不能再操作 geo-line-layer
+             
+             // 1. 先尝试执行普通分级渲染 (如果用户选了字段)
+             updateChoroplethColors();
+             
+             // 2. 恢复默认状态
+             // 面图层
+             if (map.getLayer('geo-fill-layer')) {
+                 map.setPaintProperty('geo-fill-layer', 'fill-opacity', 0.6);
+             }
+             
+             // 面边框 (Polygon Border)
+             if (map.getLayer('geo-polygon-border')) {
+                 map.setPaintProperty('geo-polygon-border', 'line-width', 1);
+                 map.setPaintProperty('geo-polygon-border', 'line-color', activeBasemap === 'light' ? '#666' : '#a5f3fc');
+             }
+
+             // 线实体 (LineString Main)
+             if (map.getLayer('geo-linestring-main')) {
+                 map.setPaintProperty('geo-linestring-main', 'line-width', 2);
+                 map.setPaintProperty('geo-linestring-main', 'line-color', '#00e5ff');
+                 map.setPaintProperty('geo-linestring-main', 'line-opacity', 0.8);
+             }
+            // ✅ 恢复点图层默认状态
+             if (map.getLayer('geo-point-layer')) {
+                 map.setPaintProperty('geo-point-layer', 'circle-color', '#00e5ff');
+                 map.setPaintProperty('geo-point-layer', 'circle-opacity', 1);
+                 map.setPaintProperty('geo-point-layer', 'circle-radius', 6);
+                 // 恢复白色描边
+                 map.setPaintProperty('geo-point-layer', 'circle-stroke-width', 1);
+                 map.setPaintProperty('geo-point-layer', 'circle-stroke-color', '#ffffff');
+             }
         }
     };
 
@@ -511,9 +620,9 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
      * 更新颜色映射 (Choropleth)
      */
     const updateChoroplethColors = () => {
-        // ✅ 卫兵：如果开启了联动模式且符合条件，直接退出，不执行普通数值映射
-        const isCategoricalMode = isMapLinkageEnabled && pivotData && !pivotConfig.groupByCol && pivotConfig.groupByRow;
-        if (isCategoricalMode) return;
+        // 卫兵：如果开启了联动模式且符合条件，直接退出
+        const isScenario1 = isMapLinkageEnabled && pivotData && pivotData.length > 0 && !pivotConfig.groupByCol && pivotConfig.groupByRow;
+        if (isScenario1) return;
 
         const map = mapInstance.current;
         const currentDisplayData = displayDataRef.current;
@@ -560,43 +669,47 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
         });
 
         // 5. 应用到地图
-        map.setPaintProperty('geo-fill-layer', 'fill-color', expression);
+        // ✅ [修复] 应用颜色到新图层
+        // 面数据：填充色变，边框保持默认
+        if (map.getLayer('geo-fill-layer')) {
+            map.setPaintProperty('geo-fill-layer', 'fill-color', expression);
+        }
+        
+        // 线数据：线条本身变色
+        if (map.getLayer('geo-linestring-main')) {
+            map.setPaintProperty('geo-linestring-main', 'line-color', expression);
+        }
+        
+        // 点数据
+        if (map.getLayer('geo-point-layer')) {
+            map.setPaintProperty('geo-point-layer', 'circle-color', expression);
+        }
         
         console.log(`🎨 颜色映射更新: Field=${activeField}, Range=[${min}, ${max}]`);
     };
 
-    // ✅ Effect 1: 仅处理“数据几何渲染” (Geometry)
-    // 只有当文件数据 (displayData) 变化，或者地图刚加载完成时，才重绘图层
+// ✅ [修改] Effect 1: 仅处理“数据几何渲染” (Geometry)
+    // 只有当文件数据变化时，重绘
     useEffect(() => {
         if (isMapLoaded && displayData) {
-            // 1. 先把几何图形画上去 (这一步会移除旧图层，添加新图层)
             renderGeoJSON(displayData);
-            
-            // 2. 画完之后，立即应用一次当前的颜色逻辑
-            // 否则新画上去的图层会是默认的蓝色，直到下一次样式更新
-            updateLinkageColors();
-            
-            console.log('🗺️ 地图几何重绘完成');
+            updateLinkageColors(); // 初始绘制后立即上色
         }
-    }, [displayData, isMapLoaded]); // ❌ 坚决不要加 pivotData, highlightedCategory 等样式状态，防止闪烁！
+    }, [displayData, isMapLoaded]); 
 
 
-    // ✅ Effect 2: 仅处理“样式/颜色更新” (Paint)
-    // 当联动开关、高亮状态、透视数据、或传统配色字段变化时，只更新颜色，不重绘几何
+    // ✅ [修改] Effect 2: 仅处理“样式/颜色更新” (Paint)
+    // 当联动开关、高亮状态、透视数据、或主题色变化时，只更新颜色
     useEffect(() => {
         if (isMapLoaded && displayData) {
             updateLinkageColors();
         }
     }, [
-        // 样式相关依赖
-        isMapLinkageEnabled, 
-        pivotData, 
-        pivotConfig, 
-        highlightedCategory, // 高亮交互
-        activeField,         // 传统数值映射字段
-        activeScheme         // 传统配色方案
+        isMapLinkageEnabled, pivotData, pivotConfig, 
+        highlightedCategory, mapColorTheme, // ✅ 依赖新状态
+        activeField, activeScheme
     ]);
-
+    
     // 监听可视化配置变化（字段、配色），只更新 Paint Property，不重绘 Geometry
     useEffect(() => {
         if (isMapLoaded && data) {

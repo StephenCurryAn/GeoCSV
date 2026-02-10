@@ -16,6 +16,12 @@ export interface ScatterConfig {
 
 // ✅ 新增：图表类型定义
 export type ChartType = 'Bar' | 'Radar' | 'Scatter' | 'Pie';
+// ✅ [修改] 扩展支持的色系 Key，增加渐变色系
+export type ColorThemeType = 
+    // 单色系 (Opacity Mode)
+    | 'cyan' | 'purple' | 'blue' | 'green' | 'yellow' | 'red' 
+    // 渐变色系 (Gradient Mode)
+    | 'fire_ice' | 'magma' | 'viridis' | 'ocean' | 'cyber';
 
 interface AnalysisState {
     // --- 透视相关 ---
@@ -50,6 +56,15 @@ interface AnalysisState {
     // ✅ 新增：当前高亮的分类（对应 pivotData 的 rowKey）
     highlightedCategory: string | null;
     setHighlightedCategory: (category: string | null) => void;
+
+    // ✅ 新增：地图/图表的主题色系
+    mapColorTheme: ColorThemeType;
+    setMapColorTheme: (theme: ColorThemeType) => void;
+
+    // ✅ [新增] 当前激活的列（用于二维透视联动）
+    // 比如用户点击了 "2021" 年的柱子，这里就存 "2021"
+    activeColumn: string | null;
+    setActiveColumn: (col: string | null) => void;
 }
 
 export const useAnalysisStore = create<AnalysisState>((set) => ({
@@ -95,4 +110,12 @@ export const useAnalysisStore = create<AnalysisState>((set) => ({
     
     highlightedCategory: null,
     setHighlightedCategory: (category) => set({ highlightedCategory: category }),
+
+    // ✅ 初始化默认为青色
+    mapColorTheme: 'cyan',
+    setMapColorTheme: (theme) => set({ mapColorTheme: theme }),
+
+    // ✅ [新增] 初始化
+    activeColumn: null,
+    setActiveColumn: (col) => set({ activeColumn: col }),
 }));
