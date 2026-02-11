@@ -390,4 +390,223 @@ export const generateGrid = async (req: Request, res: Response): Promise<void> =
         console.error('Grid generation failed:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
+};
+
+// 辅助函数：确保 Key 生成逻辑在“初始化阶段”和“聚合阶段”完全一致
+const getSafeKey = (field: string, val: any) => {
+    const strVal = String(val); // 强制转字符串
+    const safeVal = strVal.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5]/g, '_');
+    return `${field}_${safeVal}`;
+};
+
+export const exportGrid = async (req: Request, res: Response): Promise<void> => {
+    try {
+        // ✅ [修改] 接收 categoryFields 数组
+        const { fileId, shape, size, method, categoryFields } = req.body;
+
+        if (!fileId || !shape || !size) {
+            res.status(400).json({ error: 'Missing required parameters' });
+            return;
+        }
+
+        // 兼容性处理：如果前端发来的是单选的老数据（虽然改了前端应该不会，但为了健壮性）
+        const selectedCategories: string[] = Array.isArray(categoryFields) 
+            ? categoryFields 
+            : (categoryFields ? [categoryFields] : []);
+
+        console.log(`[Export] Exporting ${shape} grid (${size}km) for file ${fileId}. Categories: ${selectedCategories.join(', ') || 'None'}`);
+
+        // ✅ [Helper] 定义安全的 Key 生成函数
+        const getSafeKey = (field: string, val: any) => {
+            const strVal = String(val);
+            const safeVal = strVal.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5]/g, '_');
+            return `${field}_${safeVal}`;
+        };
+
+        // 1. 获取原始数据
+        const rawFeatures = await Feature.find({ fileId }).lean();
+        if (!rawFeatures || rawFeatures.length === 0) {
+                res.status(404).json({ error: 'No features found' });
+                return;
+        }
+
+        // 2. 识别字段 & 收集分类值
+        const numericFields = new Set<string>();
+        // ✅ [修改] 使用 Map 存储每个字段对应的唯一值集合: Map<FieldName, Set<Value>>
+        const categoryValueMap = new Map<string, Set<string>>();
+
+        // 初始化 Map
+        selectedCategories.forEach(field => categoryValueMap.set(field, new Set()));
+
+        rawFeatures.forEach((f: any) => {
+            if (f.properties) {
+                Object.keys(f.properties).forEach(key => {
+                    if (typeof f.properties[key] === 'number') {
+                        numericFields.add(key);
+                    }
+                });
+                // ✅ [修改] 扫描所有选中的分类字段
+                selectedCategories.forEach(field => {
+                    const val = f.properties[field];
+                    if (val !== undefined && val !== null) {
+                        categoryValueMap.get(field)?.add(String(val));
+                    }
+                });
+            }
+        });
+
+        const fieldsToAggregate = Array.from(numericFields);
+        // 预处理所有需要生成的 Column Keys，以提高后续性能
+        const allCategoryColumns: string[] = [];
+        categoryValueMap.forEach((values, field) => {
+            Array.from(values).sort().forEach(val => {
+                allCategoryColumns.push(getSafeKey(field, val));
+            });
+        });
+
+        console.log(`[Export] Numeric: ${fieldsToAggregate.length}, Category Cols to generate: ${allCategoryColumns.length}`);
+
+        // 3. 准备网格
+        const features = rawFeatures.map((f: any) => turf.feature(f.geometry, f.properties));
+        const featureCollection = turf.featureCollection(features);
+        const bbox = turf.bbox(featureCollection);
+        
+        const options: any = { units: 'kilometers' };
+        let grid: any;
+        try {
+            if (shape === 'hex') {
+                grid = turf.hexGrid(bbox, size, options);
+            } else {
+                grid = turf.squareGrid(bbox, size, options);
+            }
+        } catch (e) {
+            res.status(500).json({ error: 'Grid generation error' });
+            return;
+        }
+
+        // 初始化网格属性
+        grid.features.forEach((cell: any) => {
+            const props: any = { count: 0, _weight: 0 };
+            
+            // A. 常规数值
+            fieldsToAggregate.forEach(field => {
+                props[field] = (method === 'max' || method === 'min') 
+                    ? (method === 'max' ? -Infinity : Infinity) 
+                    : 0;
+            });
+
+            // ✅ [修改] B. 批量初始化所有分类列
+            allCategoryColumns.forEach(key => {
+                props[key] = 0;
+            });
+
+            cell.properties = props;
+        });
+
+        // 4. 建立索引 & 聚合
+        const gridIndex = new SimpleGridIndex(bbox, 25);
+        grid.features.forEach((cell: any) => gridIndex.insert(cell));
+
+        features.forEach((feature: any) => {
+            const geometryType = feature.geometry.type;
+            const candidateCells = gridIndex.query(feature);
+
+            // ✅ [修改] 预先计算当前要素在所有选中字段下的 Key
+            // 结果形如: ['LandUse_Res', 'RoadType_HighWay']
+            const activeCategoryKeys: string[] = [];
+            selectedCategories.forEach(field => {
+                const rawCat = feature.properties[field];
+                if (rawCat !== undefined && rawCat !== null) {
+                    activeCategoryKeys.push(getSafeKey(field, rawCat));
+                }
+            });
+
+            candidateCells.forEach((cell: any) => {
+                let ratio = 0;
+                try {
+                    // --- 几何计算 (保持原有逻辑) ---
+                    if (geometryType === 'Point') {
+                        if (turf.booleanPointInPolygon(feature, cell)) ratio = 1;
+                    } 
+                    else if (geometryType.includes('Line')) {
+                        if (turf.booleanIntersects(cell, feature)) {
+                            const totalLen = turf.length(feature);
+                            if (totalLen > 0) {
+                                    if (turf.booleanContains(cell, feature)) ratio = 1;
+                                    else ratio = 0.5; // 请务必换回你的完整 split 逻辑
+                            }
+                        }
+                    }
+                    else if (geometryType.includes('Polygon')) {
+                            if (turf.booleanIntersects(cell, feature)) {
+                                const intersect = safeIntersect(cell, feature);
+                                if (intersect) ratio = turf.area(intersect) / turf.area(feature);
+                            }
+                    }
+                    // ------------------------------
+
+                    if (ratio > 0) {
+                        cell.properties.count += 1;
+                        cell.properties._weight += ratio;
+
+                        // 1. 常规聚合
+                        fieldsToAggregate.forEach(field => {
+                            const val = Number(feature.properties[field]);
+                            if (!isNaN(val)) {
+                                if (method === 'sum' || method === 'avg') cell.properties[field] += val * ratio;
+                                else if (method === 'max') cell.properties[field] = Math.max(cell.properties[field], val);
+                                else if (method === 'min') cell.properties[field] = Math.min(cell.properties[field], val);
+                            }
+                        });
+
+                        // ✅ [修改] 2. 多分类拆分聚合
+                        // 遍历当前要素拥有的所有分类 Key，分别累加
+                        activeCategoryKeys.forEach(key => {
+                            // 容错：确保 Key 存在
+                            if (typeof cell.properties[key] === 'undefined') cell.properties[key] = 0;
+                            cell.properties[key] += ratio;
+                        });
+                    }
+                } catch (e) {}
+            });
+        });
+
+        // 5. 后处理
+        const resultFeatures = grid.features.filter((f: any) => f.properties.count > 0);
+        
+        resultFeatures.forEach((cell: any) => {
+            // 常规字段修约
+            fieldsToAggregate.forEach(field => {
+                if (method === 'avg' && cell.properties._weight > 0) {
+                    cell.properties[field] = Number((cell.properties[field] / cell.properties._weight).toFixed(2));
+                } else if (method !== 'count') {
+                    if (cell.properties[field] !== Infinity && cell.properties[field] !== -Infinity) {
+                            cell.properties[field] = Number(cell.properties[field].toFixed(2));
+                    } else {
+                            cell.properties[field] = 0;
+                    }
+                }
+            });
+            
+            // ✅ [修改] 分类字段修约 (批量处理所有生成的列)
+            allCategoryColumns.forEach(key => {
+                if (typeof cell.properties[key] !== 'undefined') {
+                    cell.properties[key] = Number(cell.properties[key].toFixed(3));
+                }
+            });
+            
+            delete cell.properties._weight;
+        });
+
+        const finalGeoJSON = turf.featureCollection(resultFeatures);
+
+        const fileName = `grid_export_${fileId}_${Date.now()}.geojson`;
+        res.setHeader('Content-Type', 'application/geo+json');
+        res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
+        res.send(JSON.stringify(finalGeoJSON));
+
+    } catch (error) {
+        console.error('Export failed:', error);
+        res.status(500).json({ error: 'Export failed' });
+    }
 }

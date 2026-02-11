@@ -20,7 +20,8 @@ import {
     AppstoreOutlined,       // Hex 图标
     BorderOutlined,         // Square 图标
     ThunderboltOutlined,    // 执行图标
-    UndoOutlined            // 重置图标
+    UndoOutlined,            // 重置图标
+    SaveOutlined
 } from '@ant-design/icons';
 import { useAnalysisStore } from '../../../stores/useAnalysisStore'
 
@@ -34,12 +35,13 @@ interface MapViewProps {
     onFeatureClick?: (feature: any) => void;
 }
 
-// ✅ [新增] 网格配置类型定义
+// ✅ [修改] 扩展 GridConfig 接口，支持多选
 interface GridConfig {
     shape: 'hex' | 'square';
     size: number;
     method: 'count' | 'sum' | 'avg' | 'max' | 'min';
     targetField: string | null;
+    categoryFields: string[]; // 改为数组
 }
 
 // --- 配置常量 ---
@@ -149,6 +151,9 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
 
     const [isMapLoaded, setIsMapLoaded] = useState(false);
     const [numericFields, setNumericFields] = useState<string[]>([]); // 可用于映射的数值字段
+    // ✅ [新增] 存储文本型字段，用于分类拆分
+    const [stringFields, setStringFields] = useState<string[]>([]);
+
     const [activeField, setActiveField] = useState<string | null>(null); // 当前选中的映射字段
     const [activeScheme, setActiveScheme] = useState<string>('default'); // 当前颜色方案
     const [activeBasemap, setActiveBasemap] = useState<string>('dark'); // 当前底图
@@ -162,12 +167,14 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
     const [isGridMode, setIsGridMode] = useState(false);
     const [gridData, setGridData] = useState<any>(null); // 存储后端返回的 GeoJSON
     const [gridLoading, setGridLoading] = useState(false);
-    // 配置面板状态
+
+    // ✅ [修改] 状态初始化
     const [gridConfig, setGridConfig] = useState<GridConfig>({
         shape: 'hex',
-        size: 5, // 默认 5km
+        size: 5,
         method: 'count',
-        targetField: null
+        targetField: null,
+        categoryFields: [] // 默认为空数组
     });
 
     // ✅ [修改] 决定当前显示数据的逻辑
@@ -278,27 +285,57 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
         };
     }, []);
 
-    // ✅ [修改] 字段提取逻辑：需兼顾 Grid 数据
+    // ✅ [修改] 字段提取逻辑分离：
+    // 1. numericFields (数值): 从 displayData 提取，用于当前地图的颜色渲染（支持网格的 value 字段）
+    // 2. stringFields (文本): 始终从 原始数据(data/allData) 提取，用于导出时的分类拆分
     useEffect(() => {
-        // 如果是 Grid 模式，我们知道字段固定是 'value' (由后端生成)
-        // 但为了通用性，还是解析一下 properties
+        // --- A. 处理渲染字段 (随视图变化) ---
         if (displayData && displayData.features && displayData.features.length > 0) {
             const firstProps = displayData.features[0].properties;
-            const fields = Object.keys(firstProps).filter(key => {
+            const numFields = Object.keys(firstProps).filter(key => {
                 const val = firstProps[key];
                 return typeof val === 'number';
             });
-            setNumericFields(fields);
-
-            // 如果刚切换到 Grid 模式，自动选中 'value'
-            if (isGridMode && fields.includes('value')) {
-                // 只有当当前没有选中或者刚生成时
-                // setActiveField('value'); // 放在生成成功的逻辑里更好
+            setNumericFields(numFields);
+            
+            // 如果切回了网格模式，且有 value 字段，自动选上
+            if (isGridMode && numFields.includes('value') && activeField !== 'value') {
+                // setActiveField('value'); // 可选：自动选中
             }
         } else {
             setNumericFields([]);
         }
-    }, [displayData, isGridMode]);
+
+        // --- B. 处理原始字段 (始终锁定原始数据) ---
+        // 确定当前持有的原始数据源
+        const sourceData = (showAll && allData) ? allData : data;
+        
+        if (sourceData && sourceData.features && sourceData.features.length > 0) {
+            const rawProps = sourceData.features[0].properties;
+            
+            // ✅ [核心修复] 从原始数据中提取分类字段
+            const strFields = Object.keys(rawProps).filter(key => {
+                const val = rawProps[key];
+                // 排除系统字段和非字符串字段
+                return typeof val === 'string' && !['_id', 'id', 'fid', 'ObjectId'].includes(key);
+            });
+            setStringFields(strFields);
+        } else {
+            setStringFields([]);
+        }
+        
+    }, [displayData, data, allData, showAll, isGridMode]); // 依赖项加上 data 等
+
+    // ✅ [新增] 全选/清空处理函数
+    const handleSelectAllCategories = () => {
+        if (gridConfig.categoryFields.length === stringFields.length) {
+            // 如果已全选，则清空
+            setGridConfig(prev => ({ ...prev, categoryFields: [] }));
+        } else {
+            // 否则全选
+            setGridConfig(prev => ({ ...prev, categoryFields: [...stringFields] }));
+        }
+    };
 
     // ✅ [新增] 生成网格处理函数
     const handleGenerateGrid = async () => {
@@ -526,22 +563,23 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
             const maxVal = Math.max(...targetValues);
             const range = maxVal - minVal;
 
-            // 1. 颜色 & 透明度 (适用于 Fill 和 LineMain)
-            const colorMatch: any[] = ['match', ['get', rowField]];
-            const opacityMatch: any[] = ['match', ['get', rowField]];
+            // ✅ [核心修改 1] 使用 'to-string' 强制转字符串，规避浮点数分支报错
+            // 原来: ['match', ['get', rowField]]
+            // 现在: ['match', ['to-string', ['get', rowField]]]
+            const colorMatch: any[] = ['match', ['to-string', ['get', rowField]]];
+            const opacityMatch: any[] = ['match', ['to-string', ['get', rowField]]];
             
             // 2. 边框逻辑 (适用于 PolygonBorder)
-            const borderStrokeWidthMatch: any[] = ['match', ['get', rowField]];
-            const borderStrokeColorMatch: any[] = ['match', ['get', rowField]];
+            const borderStrokeWidthMatch: any[] = ['match', ['to-string', ['get', rowField]]];
+            const borderStrokeColorMatch: any[] = ['match', ['to-string', ['get', rowField]]];
 
-            // 3. ✅ 线宽逻辑 (适用于 LineMain)
-            // 线数据需要通过宽度变化来增强高亮效果
-            const mainLineWidthMatch: any[] = ['match', ['get', rowField]];
+            // 3. 线宽逻辑 (适用于 LineMain)
+            const mainLineWidthMatch: any[] = ['match', ['to-string', ['get', rowField]]];
 
-            // 3. ✅ [新增] 点描边属性 (Point Stroke)
-            const pointStrokeWidthMatch: any[] = ['match', ['get', rowField]];
-            const pointStrokeColorMatch: any[] = ['match', ['get', rowField]];
-            const pointRadiusMatch: any[] = ['match', ['get', rowField]]; // 顺便把半径也放到 match 里
+            // 3. 点描边属性 (Point Stroke)
+            const pointStrokeWidthMatch: any[] = ['match', ['to-string', ['get', rowField]]];
+            const pointStrokeColorMatch: any[] = ['match', ['to-string', ['get', rowField]]];
+            const pointRadiusMatch: any[] = ['match', ['to-string', ['get', rowField]]];
 
             pivotData!.forEach((item, index) => {
                 const val = targetValues[index]; 
@@ -613,18 +651,21 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                     }
                 }
 
-                colorMatch.push(item.rowKey, finalColor);
-                opacityMatch.push(item.rowKey, finalOpacity);
+                // ✅ [核心修改 2] 将匹配值也转为字符串 String(item.rowKey)
+                const matchKey = String(item.rowKey);
+
+                colorMatch.push(matchKey, finalColor);
+                opacityMatch.push(matchKey, finalOpacity);
                 
-                borderStrokeWidthMatch.push(item.rowKey, finalBorderWidth);
-                borderStrokeColorMatch.push(item.rowKey, finalBorderColor);
+                borderStrokeWidthMatch.push(matchKey, finalBorderWidth);
+                borderStrokeColorMatch.push(matchKey, finalBorderColor);
                 
-                mainLineWidthMatch.push(item.rowKey, finalLineWidth);
+                mainLineWidthMatch.push(matchKey, finalLineWidth);
 
                 // Push Point Params
-                pointRadiusMatch.push(item.rowKey, finalPointRadius);
-                pointStrokeWidthMatch.push(item.rowKey, finalPointStrokeWidth);
-                pointStrokeColorMatch.push(item.rowKey, finalPointStrokeColor);
+                pointRadiusMatch.push(matchKey, finalPointRadius);
+                pointStrokeWidthMatch.push(matchKey, finalPointStrokeWidth);
+                pointStrokeColorMatch.push(matchKey, finalPointStrokeColor);
             });
 
             // Defaults
@@ -641,64 +682,69 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
             
             // ============ 应用属性 ============
 
-            // 1. Polygon Fill (面填充)
-            map.setPaintProperty('geo-fill-layer', 'fill-color', colorMatch);
-            map.setPaintProperty('geo-fill-layer', 'fill-opacity', opacityMatch);
+            try { // ✅ [新增] 加上 try-catch 保护
+                // 1. Polygon Fill (面填充)
+                if (map.getLayer('geo-fill-layer')) {
+                    map.setPaintProperty('geo-fill-layer', 'fill-color', colorMatch);
+                    map.setPaintProperty('geo-fill-layer', 'fill-opacity', opacityMatch);
+                }
 
-            // 2. Polygon Border (面边框) - 使用 Border 逻辑
-            map.setPaintProperty('geo-polygon-border', 'line-width', borderStrokeWidthMatch);
-            map.setPaintProperty('geo-polygon-border', 'line-color', borderStrokeColorMatch);
+                // 2. Polygon Border (面边框)
+                if (map.getLayer('geo-polygon-border')) {
+                    map.setPaintProperty('geo-polygon-border', 'line-width', borderStrokeWidthMatch);
+                    map.setPaintProperty('geo-polygon-border', 'line-color', borderStrokeColorMatch);
+                }
 
-            // 3. ✅ LineString Main (线实体) - 使用 Fill 颜色逻辑 + LineWidth 逻辑
-            // 这样线数据就拥有了和面一样的渐变色！
-            map.setPaintProperty('geo-linestring-main', 'line-color', colorMatch);
-            map.setPaintProperty('geo-linestring-main', 'line-opacity', opacityMatch);
-            map.setPaintProperty('geo-linestring-main', 'line-width', mainLineWidthMatch);
+                // 3. LineString Main (线实体)
+                if (map.getLayer('geo-linestring-main')) {
+                    map.setPaintProperty('geo-linestring-main', 'line-color', colorMatch);
+                    map.setPaintProperty('geo-linestring-main', 'line-opacity', opacityMatch);
+                    map.setPaintProperty('geo-linestring-main', 'line-width', mainLineWidthMatch);
+                }
 
-            // ✅ 4. Point (点) - 应用所有属性
-             if (map.getLayer('geo-point-layer')) {
-                 map.setPaintProperty('geo-point-layer', 'circle-color', colorMatch);
-                 map.setPaintProperty('geo-point-layer', 'circle-opacity', opacityMatch);
-                 // 应用半径、描边宽、描边色
-                 map.setPaintProperty('geo-point-layer', 'circle-radius', pointRadiusMatch);
-                 map.setPaintProperty('geo-point-layer', 'circle-stroke-width', pointStrokeWidthMatch);
-                 map.setPaintProperty('geo-point-layer', 'circle-stroke-color', pointStrokeColorMatch);
-             }
+                // 4. Point (点)
+                if (map.getLayer('geo-point-layer')) {
+                     map.setPaintProperty('geo-point-layer', 'circle-color', colorMatch);
+                     map.setPaintProperty('geo-point-layer', 'circle-opacity', opacityMatch);
+                     map.setPaintProperty('geo-point-layer', 'circle-radius', pointRadiusMatch);
+                     map.setPaintProperty('geo-point-layer', 'circle-stroke-width', pointStrokeWidthMatch);
+                     map.setPaintProperty('geo-point-layer', 'circle-stroke-color', pointStrokeColorMatch);
+                 }
+            } catch (e) {
+                console.error("Linkage Apply Error:", e);
+            }
 
         } else {
-            // ✅ [修复] 回退逻辑 (当不满足联动条件时)
-             // 必须操作新图层，不能再操作 geo-line-layer
-             
-             // 1. 先尝试执行普通分级渲染 (如果用户选了字段)
-             updateChoroplethColors();
-             
-             // 2. 恢复默认状态
-             // 面图层
-             if (map.getLayer('geo-fill-layer')) {
-                 map.setPaintProperty('geo-fill-layer', 'fill-opacity', 0.6);
-             }
-             
-             // 面边框 (Polygon Border)
-             if (map.getLayer('geo-polygon-border')) {
-                 map.setPaintProperty('geo-polygon-border', 'line-width', 1);
-                 map.setPaintProperty('geo-polygon-border', 'line-color', activeBasemap === 'light' ? '#666' : '#a5f3fc');
-             }
+            // ✅ [修复] 回退逻辑 (保持不变)
+            // 1. 先尝试执行普通分级渲染 (如果用户选了字段)
+            updateChoroplethColors();
+            
+            // 2. 恢复默认状态
+            // 面图层
+            if (map.getLayer('geo-fill-layer')) {
+                map.setPaintProperty('geo-fill-layer', 'fill-opacity', 0.6);
+            }
+            
+            // 面边框 (Polygon Border)
+            if (map.getLayer('geo-polygon-border')) {
+                map.setPaintProperty('geo-polygon-border', 'line-width', 1);
+                map.setPaintProperty('geo-polygon-border', 'line-color', activeBasemap === 'light' ? '#666' : '#a5f3fc');
+            }
 
-             // 线实体 (LineString Main)
-             if (map.getLayer('geo-linestring-main')) {
-                 map.setPaintProperty('geo-linestring-main', 'line-width', 2);
-                 map.setPaintProperty('geo-linestring-main', 'line-color', '#00e5ff');
-                 map.setPaintProperty('geo-linestring-main', 'line-opacity', 0.8);
-             }
-            // ✅ 恢复点图层默认状态
-             if (map.getLayer('geo-point-layer')) {
-                 map.setPaintProperty('geo-point-layer', 'circle-color', '#00e5ff');
-                 map.setPaintProperty('geo-point-layer', 'circle-opacity', 1);
-                 map.setPaintProperty('geo-point-layer', 'circle-radius', 6);
-                 // 恢复白色描边
-                 map.setPaintProperty('geo-point-layer', 'circle-stroke-width', 1);
-                 map.setPaintProperty('geo-point-layer', 'circle-stroke-color', '#ffffff');
-             }
+            // 线实体 (LineString Main)
+            if (map.getLayer('geo-linestring-main')) {
+                map.setPaintProperty('geo-linestring-main', 'line-width', 2);
+                map.setPaintProperty('geo-linestring-main', 'line-color', '#00e5ff');
+                map.setPaintProperty('geo-linestring-main', 'line-opacity', 0.8);
+            }
+            // 点图层
+            if (map.getLayer('geo-point-layer')) {
+                map.setPaintProperty('geo-point-layer', 'circle-color', '#00e5ff');
+                map.setPaintProperty('geo-point-layer', 'circle-opacity', 1);
+                map.setPaintProperty('geo-point-layer', 'circle-radius', 6);
+                map.setPaintProperty('geo-point-layer', 'circle-stroke-width', 1);
+                map.setPaintProperty('geo-point-layer', 'circle-stroke-color', '#ffffff');
+            }
         }
     };
 
@@ -976,7 +1022,19 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
         }
     }, [selectedFeature, isMapLoaded]);
 
-// ✅ [新增] 网格配置面板的 UI 内容
+    // ✅ [新增] 导出处理函数
+    const handleExport = async () => {
+        if (!fileId) return;
+        message.loading({ content: '正在生成并导出全量数据...', key: 'exporting' });
+        const success = await geoService.exportGridAggregation(fileId, gridConfig);
+        if (success) {
+            message.success({ content: '导出成功！已开始下载', key: 'exporting' });
+        } else {
+            message.error({ content: '导出失败，请重试', key: 'exporting' });
+        }
+    };
+
+    // ✅ [新增] 网格配置面板的 UI 内容
     const gridConfigContent = (
         // ✅ [修改] 移除 Space 组件，改用 div + flex 布局，彻底解决 direction 警告
         <div className="w-64 p-1 flex flex-col gap-2">
@@ -1058,14 +1116,65 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
 
             <div className="w-full h-px bg-gray-700 my-1"></div>
 
-            {/* 4. 执行按钮 */}
+
+            {/* ✅ [修改] 导出选项：支持多选 + 全选 */}
+            {isGridMode && (
+                <div className="mb-2 bg-gray-800/50 p-2 rounded border border-gray-700">
+                    <div className="flex justify-between items-center mb-1">
+                        <span className="text-gray-400 text-xs">
+                            分类拆分 (可多选)
+                        </span>
+                        {/* 全选按钮 */}
+                        <a 
+                            className="text-xs text-cyan-500 hover:text-cyan-400 cursor-pointer select-none"
+                            onClick={handleSelectAllCategories}
+                        >
+                            {gridConfig.categoryFields.length === stringFields.length && stringFields.length > 0 ? '清空' : '全选'}
+                        </a>
+                    </div>
+                    
+                    <Select
+                        mode="multiple"
+                        size="small"
+                        // ✅ [修改] 添加自定义类名
+                        className="w-full custom-multi-select" 
+                        placeholder="选择分类字段..."
+                        allowClear
+                        maxTagCount="responsive"
+                        value={gridConfig.categoryFields}
+                        onChange={(val) => setGridConfig(prev => ({ ...prev, categoryFields: val }))}
+                        options={stringFields.map(f => ({ label: f, value: f }))}
+                        // ✅ [修改] 移除报错的 selector 属性
+                        styles={{ 
+                            popup: { root: { border: '1px solid #334155' } } 
+                        }}
+                    />
+                </div>
+            )}
+
+            {/* 4. 执行按钮区 */}
             {isGridMode ? (
-                <Button 
-                    danger type="primary" block size="small" icon={<UndoOutlined />}
-                    onClick={handleResetGrid}
-                >
-                    重置 / 查看原始数据
-                </Button>
+                // ✅ [修改] 网格模式下：显示 重置 和 保存 两个按钮
+                <div className="flex gap-2">
+                    <Button 
+                        danger 
+                        size="small" 
+                        icon={<UndoOutlined />}
+                        onClick={handleResetGrid}
+                        className="flex-1"
+                    >
+                        重置
+                    </Button>
+                    <Button 
+                        type="primary" 
+                        size="small" 
+                        icon={<SaveOutlined />}
+                        onClick={handleExport}
+                        className="flex-1 bg-green-600 hover:bg-green-500 border-none shadow-lg shadow-green-900/50"
+                    >
+                        保存结果
+                    </Button>
+                </div>
             ) : (
                 <Button 
                     type="primary" block size="small" icon={<ThunderboltOutlined />}
@@ -1320,6 +1429,25 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                     border-radius: 8px !important;
                     padding: 12px !important;
                     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+                }
+
+                /* ✅ [新增] 强制覆盖多选框的背景色 */
+                .custom-multi-select .ant-select-selector {
+                    background-color: transparent !important;
+                    border-color: rgba(255, 255, 255, 0.2) !important; /* 可选：让边框也淡一点 */
+                }
+                
+                /* 选中项标签的样式优化 (可选) */
+                .custom-multi-select .ant-select-selection-item {
+                    background-color: rgba(6, 182, 212, 0.2) !important;
+                    border: 1px solid rgba(6, 182, 212, 0.5) !important;
+                    color: #22d3ee !important;
+                }
+                
+                /* 清除图标颜色 */
+                .custom-multi-select .ant-select-clear {
+                    background: transparent !important;
+                    color: rgba(255,255,255,0.5) !important;
                 }
             `}</style>
         </div>

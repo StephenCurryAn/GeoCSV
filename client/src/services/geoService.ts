@@ -369,6 +369,34 @@ class GeoService {
       return response.data; // 预期返回 { success: true, data: GeoJSON }
   }
 
+  /**
+   * ✅ [新增] 导出网格数据 (触发下载)
+   */
+  async exportGridAggregation(fileId: string, config: any) {
+      try {
+          const response = await apiClient.post('/analysis/export-grid', {
+              fileId,
+              ...config
+          }, {
+              responseType: 'blob' // 重要：接收二进制流
+          });
+
+          // 创建 Blob URL 并下载
+          const url = window.URL.createObjectURL(new Blob([response.data]));
+          const link = document.createElement('a');
+          link.href = url;
+          link.setAttribute('download', `grid_analysis_${config.shape}_${new Date().toISOString().slice(0,10)}.geojson`);
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          
+          return true;
+      } catch (error) {
+          console.error("Export failed", error);
+          return false;
+      }
+  }
+
 }
 
 // 导出 GeoService 实例，使其他模块可以直接使用
