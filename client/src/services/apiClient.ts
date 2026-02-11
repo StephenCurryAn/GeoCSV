@@ -16,7 +16,7 @@ const apiClient = axios.create({
    * 请求超时时间 (毫秒)
    * 防止长时间等待无响应的请求
    */
-  timeout: 30000,
+  timeout: 888888,
   
   /**
    * 默认请求头

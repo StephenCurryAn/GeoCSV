@@ -2,18 +2,25 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { bbox } from '@turf/turf';
-// ✅ [修改] 引入更多图标用于工具条
+// ✅ [修改] 引入所需的 Ant Design 组件
 import { 
     Button, Tooltip, App, Checkbox, Spin, Select, ConfigProvider, 
-    theme } from 'antd';
+    theme, Popover, Segmented, Slider, Badge 
+} from 'antd';
 import ChartOverlay, { THEME_COLORS, CONTRAST_PALETTES } from './ChartOverlay';
 import { geoService } from '../../../services/geoService';
+// ✅ [修改] 引入图标
 import { 
     BarChartOutlined, 
-    GlobalOutlined,      // 底图图标
-    BgColorsOutlined,    // 颜色图标
-    GatewayOutlined,     // 字段图标
-    CloudServerOutlined, // 全量数据图标
+    GlobalOutlined,      
+    BgColorsOutlined,    
+    GatewayOutlined,     
+    CloudServerOutlined, 
+    DeploymentUnitOutlined, // 网格入口图标
+    AppstoreOutlined,       // Hex 图标
+    BorderOutlined,         // Square 图标
+    ThunderboltOutlined,    // 执行图标
+    UndoOutlined            // 重置图标
 } from '@ant-design/icons';
 import { useAnalysisStore } from '../../../stores/useAnalysisStore'
 
@@ -25,6 +32,14 @@ interface MapViewProps {
     fileId?: string; // 当前选中的文件ID (必须要有这个才能去后台拉全量数据)
     selectedFeature?: any;
     onFeatureClick?: (feature: any) => void;
+}
+
+// ✅ [新增] 网格配置类型定义
+interface GridConfig {
+    shape: 'hex' | 'square';
+    size: number;
+    method: 'count' | 'sum' | 'avg' | 'max' | 'min';
+    targetField: string | null;
 }
 
 // --- 配置常量 ---
@@ -143,9 +158,23 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
     const [allData, setAllData] = useState<any>(null);
     const [loading, setLoading] = useState(false);
 
-    // ✅关键 - 决定当前地图渲染哪一份数据
-    // 如果勾选了 showAll 且有缓存数据，就用 allData，否则用父组件传来的分页 data
-    const displayData = (showAll && allData) ? allData : data;
+    // ✅ [新增] 空间网格相关状态
+    const [isGridMode, setIsGridMode] = useState(false);
+    const [gridData, setGridData] = useState<any>(null); // 存储后端返回的 GeoJSON
+    const [gridLoading, setGridLoading] = useState(false);
+    // 配置面板状态
+    const [gridConfig, setGridConfig] = useState<GridConfig>({
+        shape: 'hex',
+        size: 5, // 默认 5km
+        method: 'count',
+        targetField: null
+    });
+
+    // ✅ [修改] 决定当前显示数据的逻辑
+    // 优先级：网格模式(gridData) > 全量模式(allData) > 分页模式(data)
+    const displayData = (isGridMode && gridData) 
+        ? gridData 
+        : ((showAll && allData) ? allData : data);
 
     // ✅使用 Ref 来始终追踪最新的 displayData
     // Ref 可以穿透闭包，确保在事件监听器（如切换底图）中拿到的是这一刻应该显示的数据（全量），而不是旧数据
@@ -249,24 +278,73 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
         };
     }, []);
 
-    // ✅数据处理：提取数值字段 (当 data 变化时)，改为依赖 displayData
+    // ✅ [修改] 字段提取逻辑：需兼顾 Grid 数据
     useEffect(() => {
+        // 如果是 Grid 模式，我们知道字段固定是 'value' (由后端生成)
+        // 但为了通用性，还是解析一下 properties
         if (displayData && displayData.features && displayData.features.length > 0) {
             const firstProps = displayData.features[0].properties;
-            // Object.keys（）处理被解析过的 JavaScript 对象
             const fields = Object.keys(firstProps).filter(key => {
                 const val = firstProps[key];
-                return typeof val === 'number'; // 只筛选数值类型的字段
+                return typeof val === 'number';
             });
             setNumericFields(fields);
-            // 切换数据时，重置选中字段，除非新数据也有同名字段
-            setActiveField(prev => fields.includes(prev || '') ? prev : null);
+
+            // 如果刚切换到 Grid 模式，自动选中 'value'
+            if (isGridMode && fields.includes('value')) {
+                // 只有当当前没有选中或者刚生成时
+                // setActiveField('value'); // 放在生成成功的逻辑里更好
+            }
         } else {
             setNumericFields([]);
         }
-    }, [displayData]);
+    }, [displayData, isGridMode]);
 
-/**
+    // ✅ [新增] 生成网格处理函数
+    const handleGenerateGrid = async () => {
+        if (!fileId) {
+            message.error("无法获取文件ID，请先保存文件");
+            return;
+        }
+        if (gridConfig.method !== 'count' && !gridConfig.targetField) {
+            message.warning("非计数模式下，请选择一个数值字段");
+            return;
+        }
+
+        setGridLoading(true);
+        try {
+            // 1. 调用后端接口
+            const res = await geoService.generateGridAggregation(fileId, gridConfig);
+            
+            if (res.success && res.data) {
+                setGridData(res.data); // 保存网格 GeoJSON
+                setIsGridMode(true);   // 进入网格模式
+                
+                // 2. 自动设置渲染字段为聚合结果 'value'
+                setActiveField('value'); 
+                
+                message.success(`生成成功: ${res.data.features.length} 个网格单元`);
+            } else {
+                message.error("生成失败: 后端返回异常");
+            }
+
+        } catch (err) {
+            console.error(err);
+            message.error("网格生成请求失败，请检查后端服务");
+        } finally {
+            setGridLoading(false);
+        }
+    };
+
+    // ✅ [新增] 重置网格，切回原始数据
+    const handleResetGrid = () => {
+        setIsGridMode(false);
+        setGridData(null);
+        setActiveField(null); // 清空字段，让用户重新选
+        message.info("已切换回原始图层");
+    };
+
+    /**
      * ✅ [修改] 核心渲染逻辑：只负责 Geometry 和基础图层架构
      * (移除了底部的 map.on 事件绑定，防止重复)
      */
@@ -660,6 +738,18 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
         });
 
         if (min === Infinity || max === -Infinity) return; // 没数据
+        
+        // ✅ [核心修复] 处理 min === max 的情况
+        // 你的报错就是因为 min=0, max=0 导致插值表达式只有 [0, color, 0, color...]，违反了 strictly ascending 规则
+        if (min === max) {
+            // 取中间色，或第一个颜色
+            const singleColor = colors[Math.floor(colors.length / 2)];
+            
+            if (map.getLayer('geo-fill-layer')) map.setPaintProperty('geo-fill-layer', 'fill-color', singleColor);
+            if (map.getLayer('geo-linestring-main')) map.setPaintProperty('geo-linestring-main', 'line-color', singleColor);
+            if (map.getLayer('geo-point-layer')) map.setPaintProperty('geo-point-layer', 'circle-color', singleColor);
+            return; // 重要：处理完直接返回，不再执行下面的 interpolate
+        }
 
         // 4. 构建插值表达式 (Linear Interpolation)
         const step = (max - min) / (colors.length - 1);
@@ -886,9 +976,118 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
         }
     }, [selectedFeature, isMapLoaded]);
 
+// ✅ [新增] 网格配置面板的 UI 内容
+    const gridConfigContent = (
+        // ✅ [修改] 移除 Space 组件，改用 div + flex 布局，彻底解决 direction 警告
+        <div className="w-64 p-1 flex flex-col gap-2">
+            
+            {/* 1. 形状选择 */}
+            <div className="flex justify-between items-center">
+                <span className="text-gray-400 text-xs">网格形状</span>
+                <Segmented
+                    value={gridConfig.shape}
+                    onChange={(val: any) => setGridConfig(prev => ({ ...prev, shape: val }))}
+                    options={[
+                        { label: '六边形', value: 'hex', icon: <AppstoreOutlined /> },
+                        { label: '正方形', value: 'square', icon: <BorderOutlined /> }
+                    ]}
+                    size="small"
+                    className="bg-gray-700 text-gray-200"
+                />
+            </div>
+
+            {/* 2. 大小滑块 */}
+            <div>
+                <div className="flex justify-between text-xs text-gray-400 mb-1">
+                    <span>网格大小 (Radius)</span>
+                    {/* ✅ [修改] 优化显示逻辑，小于1km显示米 */}
+                    <span className="text-cyan-400 font-mono">
+                        {gridConfig.size < 1 
+                            ? `${Math.round(gridConfig.size * 1000)} m` 
+                            : `${gridConfig.size} km`}
+                    </span>
+                </div>
+                {/* ✅ [修改] 调整 Slider 参数：min=0.1 (100m), step=0.1 */}
+                <Slider
+                    min={0.1} 
+                    max={50}
+                    step={0.1} // 允许 0.1km 的微调
+                    value={gridConfig.size}
+                    onChange={(val) => setGridConfig(prev => ({ ...prev, size: val }))}
+                    tooltip={{ open: false }}
+                    styles={{ track: { background: '#00e5ff' }, handle: { borderColor: '#00e5ff' } }}
+                />
+            </div>
+
+            {/* 3. 聚合方式 */}
+            <div className="grid grid-cols-2 gap-2">
+                <div>
+                    <span className="text-gray-400 text-xs block mb-1">聚合模式</span>
+                    <Select
+                        size="small"
+                        className="w-full"
+                        value={gridConfig.method}
+                        onChange={(val) => setGridConfig(prev => ({ ...prev, method: val as any }))}
+                        options={[
+                            { label: '计数 (Count)', value: 'count' },
+                            { label: '求和 (Sum)', value: 'sum' },
+                            { label: '平均 (Avg)', value: 'avg' },
+                            { label: '最大 (Max)', value: 'max' },
+                            { label: '最小 (Min)', value: 'min' },
+                        ]}
+                        // ✅ [修复] 使用 styles.popup.root 替代 dropdownStyle
+                        styles={{ popup: { root: { border: '1px solid #334155' } } }}
+                    />
+                </div>
+                {/* 级联显示字段选择 */}
+                <div>
+                    <span className="text-gray-400 text-xs block mb-1">聚合字段</span>
+                    <Select
+                        size="small"
+                        className="w-full"
+                        placeholder="选择字段"
+                        disabled={gridConfig.method === 'count'}
+                        value={gridConfig.targetField}
+                        onChange={(val) => setGridConfig(prev => ({ ...prev, targetField: val }))}
+                        options={numericFields.filter(f => f !== 'value').map(f => ({ label: f, value: f }))} 
+                        // ✅ [修复] 同上
+                        styles={{ popup: { root: { border: '1px solid #334155' } } }}
+                    />
+                </div>
+            </div>
+
+            <div className="w-full h-px bg-gray-700 my-1"></div>
+
+            {/* 4. 执行按钮 */}
+            {isGridMode ? (
+                <Button 
+                    danger type="primary" block size="small" icon={<UndoOutlined />}
+                    onClick={handleResetGrid}
+                >
+                    重置 / 查看原始数据
+                </Button>
+            ) : (
+                <Button 
+                    type="primary" block size="small" icon={<ThunderboltOutlined />}
+                    className="bg-linear-to-r from-cyan-600 to-blue-600 border-none shadow-lg shadow-blue-900/50 hover:shadow-cyan-500/50 transition-all"
+                    onClick={handleGenerateGrid}
+                    loading={gridLoading}
+                >
+                    生成网格 (Generate)
+                </Button>
+            )}
+        </div>
+    );
 
     return (
         <div className="w-full h-full relative">
+            
+            {/* ✅ [新增] 顶部进度条 (全局状态反馈) */}
+            {gridLoading && (
+                <div className="absolute top-0 left-0 w-full h-1 bg-gray-800 z-50">
+                    <div className="h-full bg-cyan-400 animate-progress-indeterminate shadow-[0_0_10px_#00e5ff]"></div>
+                </div>
+            )}
             {/* ✅加载遮罩层 - 当请求全量数据时显示 */}
             {loading && (
                 <div className="absolute inset-0 bg-black/60 z-50 flex flex-col items-center justify-center backdrop-blur-sm">
@@ -910,9 +1109,8 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                 </div>
             )}
 
-            {/* ✅ [重构] 核心变更：横向悬浮工具条 (HUD Style) */}
+            {/* ✅ [修改] HUD Toolbar: 包含网格聚合模块 */}
             <div className="absolute top-16 left-4 z-10 transition-all duration-300 ease-in-out">
-                
                 <ConfigProvider
                     theme={{
                         algorithm: theme.darkAlgorithm,
@@ -928,11 +1126,14 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                                 selectorBg: 'transparent',
                                 colorBgElevated: 'rgba(17, 24, 39, 0.95)',
                                 optionSelectedBg: 'rgba(6, 182, 212, 0.2)',
+                            },
+                            Segmented: {
+                                itemSelectedBg: '#00e5ff',
+                                itemSelectedColor: '#000',
                             }
                         }
                     }}
                 >
-                    {/* 工具条容器 */}
                     <div className="bg-gray-900/80 backdrop-blur-xl border border-cyan-500/30 px-2 py-1.5 rounded-full shadow-[0_4px_20px_rgba(0,0,0,0.5)] flex items-center gap-1 hover:border-cyan-400/60 transition-colors">
                         
                         {/* 1. 底图切换 */}
@@ -946,12 +1147,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                                     onChange={handleBasemapChange}
                                     className="w-24 font-bold text-gray-200"
                                     suffixIcon={null}
-                                    // ✅ [修复] 使用 root 包裹样式
-                                    styles={{ 
-                                        popup: { 
-                                            root: { border: '1px solid #334155', borderRadius: '8px' } 
-                                        } 
-                                    }}
+                                    styles={{ popup: { root: { border: '1px solid #334155', borderRadius: '8px' } } }}
                                 >
                                     {BASEMAPS.map(b => (
                                         <Option key={b.key} value={b.key}>{b.name}</Option>
@@ -960,38 +1156,58 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                             </div>
                         </Tooltip>
 
-                        {/* 分割线 */}
                         <div className="w-px h-5 bg-gray-600 mx-1" />
 
-                        {/* 2. 字段选择 */}
-                        <Tooltip title="数据映射字段">
-                            <div className="flex items-center px-2">
+                        {/* ✅ [新增] 2. 空间网格聚合模块 */}
+                        <Popover 
+                            content={gridConfigContent} 
+                            trigger="hover" 
+                            placement="bottom"
+                            // ❌ [删除] styles={{ body: ... }} 或 overlayInnerStyle
+                            // ✅ [新增] 使用 CSS 类名
+                            overlayClassName="grid-config-popover"
+                            arrow={false}
+                        >
+                            <div className={`flex items-center px-3 cursor-pointer rounded-full transition-all ${isGridMode ? 'bg-cyan-500/20 text-cyan-300' : 'hover:bg-white/10 text-gray-300'}`}>
+                                <Badge dot={isGridMode} color="#00e5ff" offset={[-2, 2]}>
+                                    <DeploymentUnitOutlined className={`text-lg mr-2 ${isGridMode ? 'animate-pulse' : 'text-yellow-500'}`} />
+                                </Badge>
+                                <span className="text-xs font-bold whitespace-nowrap">
+                                    {isGridMode ? '网格视图' : '空间聚合'}
+                                </span>
+                            </div>
+                        </Popover>
+
+                        <div className="w-px h-5 bg-gray-600 mx-1" />
+
+                        {/* 3. 普通渲染 (互斥逻辑) */}
+                        <Tooltip title={isGridMode ? "网格模式下不可用 (已自动映射)" : "选择字段进行着色"}>
+                            <div className={`flex items-center px-2 transition-opacity ${isGridMode ? 'opacity-50 cursor-not-allowed' : ''}`}>
                                 <GatewayOutlined className="text-purple-400 mr-2 text-lg" />
                                 <Select
                                     variant="borderless"
                                     popupMatchSelectWidth={false}
-                                    placeholder="选择字段..."
+                                    // ✅ [修改] 提示文案变化
+                                    placeholder={isGridMode ? "聚合值" : "普通渲染"}
                                     value={activeField}
                                     onChange={setActiveField}
-                                    allowClear
-                                    disabled={numericFields.length === 0}
+                                    allowClear={!isGridMode}
+                                    // ✅ [修改] 禁用逻辑
+                                    disabled={isGridMode || numericFields.length === 0} 
                                     className="min-w-25 max-w-35 text-gray-200"
-                                    // ✅ [修复] 使用 root 包裹样式
-                                    styles={{ 
-                                        popup: { 
-                                            root: { border: '1px solid #334155', borderRadius: '8px' } 
-                                        } 
-                                    }}
+                                    styles={{ popup: { root: { border: '1px solid #334155', borderRadius: '8px' } } }}
                                 >
                                     <Option value="none">-- 默认纯色 --</Option>
                                     {numericFields.map(field => (
                                         <Option key={field} value={field}>{field}</Option>
                                     ))}
+                                    {/* 网格模式下可能包含 value 字段 */}
+                                    {isGridMode && <Option value="value">聚合值 (Value)</Option>}
                                 </Select>
                             </div>
                         </Tooltip>
 
-                        {/* 3. 颜色方案 (条件渲染) */}
+                        {/* 4. 颜色方案 */}
                         {activeField && activeField !== 'none' && (
                             <>
                                 <div className="w-px h-5 bg-gray-600 mx-1" />
@@ -1004,12 +1220,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                                             value={activeScheme}
                                             onChange={setActiveScheme}
                                             className="w-28 text-gray-200"
-                                            // ✅ [修复] 使用 root 包裹样式
-                                            styles={{ 
-                                                popup: { 
-                                                    root: { border: '1px solid #334155', borderRadius: '8px' } 
-                                                } 
-                                            }}
+                                            styles={{ popup: { root: { border: '1px solid #334155', borderRadius: '8px' } } }}
                                             optionLabelProp="label"
                                         >
                                             {Object.entries(COLOR_SCHEMES).map(([key, scheme]) => (
@@ -1032,18 +1243,18 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
 
                         <div className="w-px h-5 bg-gray-600 mx-1" />
 
-                        {/* 4. 全量数据开关 */}
-                        <Tooltip title={fileId ? "加载该文件所有分页数据" : "需保存文件后可用"}>
+                        {/* 5. 全量数据 (网格模式下禁用) */}
+                        <Tooltip title={isGridMode ? "网格模式下已锁定" : (fileId ? "加载该文件所有分页数据" : "需保存文件后可用")}>
                             <div className="flex items-center px-2 cursor-pointer hover:bg-white/5 rounded transition-colors" onClick={(e) => e.stopPropagation()}>
                                 <CloudServerOutlined className={`mr-2 text-lg ${showAll ? 'text-green-400' : 'text-gray-500'}`} />
                                 <Checkbox 
                                     checked={showAll}
                                     onChange={handleShowAllChange}
-                                    disabled={!fileId || loading} 
+                                    disabled={!fileId || loading || isGridMode} 
                                     className="text-gray-300 text-xs whitespace-nowrap"
                                 >
                                     <span className={`${showAll ? 'text-green-400 font-bold' : 'text-gray-400'}`}>
-                                        全量模式
+                                        全量
                                     </span>
                                 </Checkbox>
                             </div>
@@ -1089,14 +1300,26 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                 .dark-cool-popup .maplibregl-popup-close-button {
                     color: #22d3ee;
                 }
-                
-                /* 简单的进入动画 */
-                @keyframes slideIn {
-                    from { opacity: 0; transform: translateX(-10px); }
-                    to { opacity: 1; transform: translateX(0); }
-                }
                 .animate-slide-in-left {
                     animation: slideIn 0.3s ease-out forwards;
+                }
+                @keyframes progress-indeterminate {
+                    0% { width: 0%; margin-left: 0%; }
+                    50% { width: 70%; margin-left: 30%; }
+                    100% { width: 0%; margin-left: 100%; }
+                }
+                .animate-progress-indeterminate {
+                    animation: progress-indeterminate 1.5s infinite ease-in-out;
+                }
+                
+                /* ✅ [新增] Popover 样式覆盖 (解决 TS 报错和警告) */
+                .grid-config-popover .ant-popover-inner {
+                    background-color: rgba(17, 24, 39, 0.95) !important;
+                    backdrop-filter: blur(10px) !important;
+                    border: 1px solid #06b6d4 !important;
+                    border-radius: 8px !important;
+                    padding: 12px !important;
+                    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
                 }
             `}</style>
         </div>

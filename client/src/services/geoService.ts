@@ -352,6 +352,23 @@ class GeoService {
     }
   }
 
+  /**
+   * ✅ [修改] 真实调用后端生成空间网格
+   */
+  async generateGridAggregation(fileId: string, config: {
+      shape: 'hex' | 'square',
+      size: number,
+      method: string,
+      targetField?: string | null
+  }) {
+      // 使用 POST 请求发送配置
+      const response = await apiClient.post('/analysis/grid', {
+          fileId,
+          ...config
+      });
+      return response.data; // 预期返回 { success: true, data: GeoJSON }
+  }
+
 }
 
 // 导出 GeoService 实例，使其他模块可以直接使用
