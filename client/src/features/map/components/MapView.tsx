@@ -2,14 +2,22 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { bbox } from '@turf/turf';
-import { Button, Tooltip, App, Checkbox, Spin, Select, ConfigProvider, theme, Space, Typography } from 'antd'; // 引入 Ant Design
+// ✅ [修改] 引入更多图标用于工具条
+import { 
+    Button, Tooltip, App, Checkbox, Spin, Select, ConfigProvider, 
+    theme } from 'antd';
 import ChartOverlay, { THEME_COLORS, CONTRAST_PALETTES } from './ChartOverlay';
 import { geoService } from '../../../services/geoService';
-import { BarChartOutlined } from '@ant-design/icons';
+import { 
+    BarChartOutlined, 
+    GlobalOutlined,      // 底图图标
+    BgColorsOutlined,    // 颜色图标
+    GatewayOutlined,     // 字段图标
+    CloudServerOutlined, // 全量数据图标
+} from '@ant-design/icons';
 import { useAnalysisStore } from '../../../stores/useAnalysisStore'
 
 const { Option } = Select;
-const { Text } = Typography;
 
 interface MapViewProps {
     data: any;        // GeoJSON 数据
@@ -892,118 +900,158 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
             {/* 地图容器 */}
             <div ref={mapContainer} className="w-full h-full" />
 
-            {/* 🛠️ 控制面板 (右上角) */}
-            <div className="absolute top-4 right-4 z-10 flex flex-col gap-3">
+            {/* ✅ [修改] 文件名提示 (调整位置和样式，使其与下方工具条对齐) */}
+            {fileName && (
+                <div className="absolute top-4 left-4 z-10 animate-fade-in-down">
+                     <div className="bg-gray-900/80 backdrop-blur-md text-cyan-400 px-4 py-1.5 rounded-full border border-cyan-500/30 text-xs font-mono shadow-[0_0_10px_rgba(0,229,255,0.2)] flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+                        VISUALIZING: <span className="text-white font-bold">{fileName}</span>
+                     </div>
+                </div>
+            )}
+
+            {/* ✅ [重构] 核心变更：横向悬浮工具条 (HUD Style) */}
+            <div className="absolute top-16 left-4 z-10 transition-all duration-300 ease-in-out">
                 
-                {/* 使用 Antd ConfigProvider 强制深色主题 */}
                 <ConfigProvider
                     theme={{
                         algorithm: theme.darkAlgorithm,
                         token: {
-                            colorBgContainer: 'rgba(17, 24, 39, 0.8)', // bg-gray-900 transparent
-                            colorBorder: '#06b6d4', // cyan-500
+                            colorBgContainer: 'transparent',
+                            colorBorder: 'transparent',
                             colorPrimary: '#00e5ff',
+                            colorTextPlaceholder: 'rgba(255,255,255,0.4)',
+                            controlHeight: 32,
+                        },
+                        components: {
+                            Select: {
+                                selectorBg: 'transparent',
+                                colorBgElevated: 'rgba(17, 24, 39, 0.95)',
+                                optionSelectedBg: 'rgba(6, 182, 212, 0.2)',
+                            }
                         }
                     }}
                 >
-                    {/* 面板容器 */}
-                    <div className="bg-gray-900/90 backdrop-blur-md border border-cyan-500/30 p-4 rounded-lg shadow-[0_0_15px_rgba(0,0,0,0.5)] w-64">
+                    {/* 工具条容器 */}
+                    <div className="bg-gray-900/80 backdrop-blur-xl border border-cyan-500/30 px-2 py-1.5 rounded-full shadow-[0_4px_20px_rgba(0,0,0,0.5)] flex items-center gap-1 hover:border-cyan-400/60 transition-colors">
                         
-                        <div className="mb-4 border-b border-gray-700 pb-2 flex items-center justify-between">
-                            {/* 左侧：标题 */}
-                            <span className="text-cyan-400 font-bold text-sm flex items-center">
-                                <span className="w-2 h-2 bg-cyan-400 rounded-full mr-2 shadow-[0_0_5px_#00e5ff]"></span>
-                                图层配置
-                            </span>
-
-                            {/* 右侧：开关 */}
-                            <Checkbox 
-                                checked={showAll}
-                                onChange={handleShowAllChange}
-                                disabled={!fileId || loading} 
-                                className="text-gray-300 text-xs"
-                            >
-                                <span className="text-gray-300">
-                                    数据显示({showAll ? '全量' : '分页'})
-                                </span>
-                            </Checkbox>
-                        </div>
-
-                        {/* Antd v6 使用 orientation 替代 direction */}
-                        <Space orientation="vertical" className="w-full" size="middle">
-                            
-                            {/* 1. 字段选择 */}
-                            <div>
-                                <Text className="text-gray-400 text-xs mb-1 block">映射字段 (Color Field)</Text>
+                        {/* 1. 底图切换 */}
+                        <Tooltip title="切换底图风格">
+                            <div className="flex items-center px-2">
+                                <GlobalOutlined className="text-cyan-500 mr-2 text-lg" />
                                 <Select
-                                    className="w-full"
-                                    placeholder="选择数值字段..."
-                                    value={activeField}
-                                    onChange={setActiveField}
-                                    allowClear
-                                    disabled={numericFields.length === 0}
-                                >
-                                    <Option value="none">-- 无 (纯色) --</Option>
-                                    {numericFields.map(field => (
-                                        <Option key={field} value={field}>{field}</Option>
-                                    ))}
-                                </Select>
-                            </div>
-
-                            {/* 2. 颜色方案 */}
-                            {activeField && activeField !== 'none' && (
-                                <div>
-                                    <Text className="text-gray-400 text-xs mb-1 block">颜色方案 (Palette)</Text>
-                                    <Select
-                                        className="w-full"
-                                        value={activeScheme}
-                                        onChange={setActiveScheme}
-                                    >
-                                        {/* Object.entries 把它转换成数组，方便遍历 */}
-                                        {Object.entries(COLOR_SCHEMES).map(([key, scheme]) => (
-                                            <Option key={key} value={key}>
-                                                <div className="flex items-center justify-between">
-                                                    <span>{scheme.name}</span>
-                                                    {/* 小色条预览 */}
-                                                    <div className="flex h-3 w-12 ml-2 rounded overflow-hidden border border-white/20">
-                                                        {scheme.colors.map((c, index) => (
-                                                            // 使用 index 作为 key，确保唯一性
-                                                            // flex: 1：这一句最关键。 它的意思是“平分空间
-                                                            <div key={index} style={{ backgroundColor: c, flex: 1 }} />
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                            </Option>
-                                        ))}
-                                    </Select>
-                                </div>
-                            )}
-
-                            {/* 3. 底图切换 */}
-                            <div>
-                                <Text className="text-gray-400 text-xs mb-1 block">底图样式 (Basemap)</Text>
-                                <Select
-                                    className="w-full"
+                                    variant="borderless"
+                                    popupMatchSelectWidth={false}
                                     value={activeBasemap}
                                     onChange={handleBasemapChange}
+                                    className="w-24 font-bold text-gray-200"
+                                    suffixIcon={null}
+                                    // ✅ [修复] 使用 root 包裹样式
+                                    styles={{ 
+                                        popup: { 
+                                            root: { border: '1px solid #334155', borderRadius: '8px' } 
+                                        } 
+                                    }}
                                 >
                                     {BASEMAPS.map(b => (
                                         <Option key={b.key} value={b.key}>{b.name}</Option>
                                     ))}
                                 </Select>
                             </div>
+                        </Tooltip>
 
-                        </Space>
+                        {/* 分割线 */}
+                        <div className="w-px h-5 bg-gray-600 mx-1" />
+
+                        {/* 2. 字段选择 */}
+                        <Tooltip title="数据映射字段">
+                            <div className="flex items-center px-2">
+                                <GatewayOutlined className="text-purple-400 mr-2 text-lg" />
+                                <Select
+                                    variant="borderless"
+                                    popupMatchSelectWidth={false}
+                                    placeholder="选择字段..."
+                                    value={activeField}
+                                    onChange={setActiveField}
+                                    allowClear
+                                    disabled={numericFields.length === 0}
+                                    className="min-w-25 max-w-35 text-gray-200"
+                                    // ✅ [修复] 使用 root 包裹样式
+                                    styles={{ 
+                                        popup: { 
+                                            root: { border: '1px solid #334155', borderRadius: '8px' } 
+                                        } 
+                                    }}
+                                >
+                                    <Option value="none">-- 默认纯色 --</Option>
+                                    {numericFields.map(field => (
+                                        <Option key={field} value={field}>{field}</Option>
+                                    ))}
+                                </Select>
+                            </div>
+                        </Tooltip>
+
+                        {/* 3. 颜色方案 (条件渲染) */}
+                        {activeField && activeField !== 'none' && (
+                            <>
+                                <div className="w-px h-5 bg-gray-600 mx-1" />
+                                <Tooltip title="颜色方案">
+                                    <div className="flex items-center px-2 animate-slide-in-left">
+                                        <BgColorsOutlined className="text-pink-400 mr-2 text-lg" />
+                                        <Select
+                                            variant="borderless"
+                                            popupMatchSelectWidth={200}
+                                            value={activeScheme}
+                                            onChange={setActiveScheme}
+                                            className="w-28 text-gray-200"
+                                            // ✅ [修复] 使用 root 包裹样式
+                                            styles={{ 
+                                                popup: { 
+                                                    root: { border: '1px solid #334155', borderRadius: '8px' } 
+                                                } 
+                                            }}
+                                            optionLabelProp="label"
+                                        >
+                                            {Object.entries(COLOR_SCHEMES).map(([key, scheme]) => (
+                                                <Option key={key} value={key} label={scheme.name}>
+                                                    <div className="flex items-center justify-between py-1">
+                                                        <span className="text-xs">{scheme.name}</span>
+                                                        <div className="flex h-2 w-10 ml-2 rounded overflow-hidden">
+                                                            {scheme.colors.map((c, i) => (
+                                                                <div key={i} style={{ backgroundColor: c, flex: 1 }} />
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                </Option>
+                                            ))}
+                                        </Select>
+                                    </div>
+                                </Tooltip>
+                            </>
+                        )}
+
+                        <div className="w-px h-5 bg-gray-600 mx-1" />
+
+                        {/* 4. 全量数据开关 */}
+                        <Tooltip title={fileId ? "加载该文件所有分页数据" : "需保存文件后可用"}>
+                            <div className="flex items-center px-2 cursor-pointer hover:bg-white/5 rounded transition-colors" onClick={(e) => e.stopPropagation()}>
+                                <CloudServerOutlined className={`mr-2 text-lg ${showAll ? 'text-green-400' : 'text-gray-500'}`} />
+                                <Checkbox 
+                                    checked={showAll}
+                                    onChange={handleShowAllChange}
+                                    disabled={!fileId || loading} 
+                                    className="text-gray-300 text-xs whitespace-nowrap"
+                                >
+                                    <span className={`${showAll ? 'text-green-400 font-bold' : 'text-gray-400'}`}>
+                                        全量模式
+                                    </span>
+                                </Checkbox>
+                            </div>
+                        </Tooltip>
+
                     </div>
                 </ConfigProvider>
             </div>
-
-            {/* 文件名提示 (左上角，保留) */}
-            {fileName && (
-                <div className="absolute top-4 left-4 bg-black/70 backdrop-blur-md text-cyan-400 px-3 py-1 rounded border border-cyan-500/30 text-xs font-mono z-10 shadow-lg">
-                    VISUALIZING: {fileName}
-                </div>
-            )}
             
             {/* ✅ 3. 放置 HUD 图表组件 (绝对定位在地图层之上) */}
             <ChartOverlay />
@@ -1024,8 +1072,8 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                 </div>
             )}
 
+            {/* 样式 (保持原有的 Popup 样式，并添加动画) */}
             <style>{`
-                /* 复用之前的 Popup 样式 */
                 .dark-cool-popup .maplibregl-popup-content {
                     background: rgba(17, 24, 39, 0.95) !important;
                     border: 1px solid #06b6d4;
@@ -1040,6 +1088,15 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                 }
                 .dark-cool-popup .maplibregl-popup-close-button {
                     color: #22d3ee;
+                }
+                
+                /* 简单的进入动画 */
+                @keyframes slideIn {
+                    from { opacity: 0; transform: translateX(-10px); }
+                    to { opacity: 1; transform: translateX(0); }
+                }
+                .animate-slide-in-left {
+                    animation: slideIn 0.3s ease-out forwards;
                 }
             `}</style>
         </div>
