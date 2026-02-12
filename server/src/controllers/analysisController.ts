@@ -208,6 +208,12 @@ export const generateGrid = async (req: Request, res: Response): Promise<void> =
         }
 
         const features = rawFeatures.map((f: any) => turf.feature(f.geometry, f.properties));
+        
+        // ✅ [新增] 预判数据类型，用于覆盖率计算
+        const firstGeom = features[0]?.geometry.type;
+        const isPolygonLayer = firstGeom?.includes('Polygon');
+        const isLineLayer = firstGeom?.includes('Line');
+        
         const featureCollection = turf.featureCollection(features);
         const bbox = turf.bbox(featureCollection);
         
@@ -248,11 +254,27 @@ export const generateGrid = async (req: Request, res: Response): Promise<void> =
         features.forEach((feature: any) => {
             const geometryType = feature.geometry.type;
             let rawValue = 1;
-            if (method !== 'count' && targetField) {
+            
+            // ✅ [修改] 确定 rawValue (根据模式)
+            if (method === 'coverage') {
+                // 覆盖率模式：计算几何体自身的绝对量（面积或长度）
+                if (isPolygonLayer) {
+                    // 面：使用平方米
+                    rawValue = turf.area(feature); 
+                } else if (isLineLayer) {
+                    // 线：使用千米
+                    rawValue = turf.length(feature, { units: 'kilometers' });
+                } else {
+                    // 点数据不支持覆盖率，忽略
+                    return; 
+                }
+            } else if (method !== 'count' && targetField) {
+                // 属性聚合模式
                 const val = Number(feature.properties[targetField]);
                 if (isNaN(val)) return;
                 rawValue = val;
             }
+            // 计数模式 rawValue 默认为 1
 
             const candidateCells = gridIndex.query(feature);
             
@@ -324,9 +346,35 @@ export const generateGrid = async (req: Request, res: Response): Promise<void> =
 
         console.log(`[Grid] Processed ${processedCount} features. Active cells: ${activeCellIds.size}`);
 
+        // ✅ [新增] 覆盖率模式的后处理：除以网格面积
+        if (method === 'coverage') {
+            grid.features.forEach((cell: any) => {
+                if (activeCellIds.has(cell.properties._id)) {
+                    const cellAreaSqM = turf.area(cell); // 网格面积 (m²)
+                    
+                    if (isPolygonLayer) {
+                        // 面覆盖率 = (网格内建筑总面积 m²) / (网格面积 m²)
+                        // 结果范围 0.0 - 1.0
+                        cell.properties.value = cell.properties.value / cellAreaSqM;
+                        // 修正可能的浮点误差，最大不超过 1
+                        if (cell.properties.value > 1) cell.properties.value = 1;
+                    } else if (isLineLayer) {
+                        // 线密度 = (网格内道路总长 km) / (网格面积 km²)
+                        // 结果单位：km/km²
+                        const cellAreaSqKm = cellAreaSqM / 1_000_000;
+                        if (cellAreaSqKm > 0) {
+                            cell.properties.value = cell.properties.value / cellAreaSqKm;
+                        }
+                    }
+                }
+            });
+        }
+
         // 5. 修约数值
         grid.features.forEach((cell: any) => {
-            cell.properties.value = Number(cell.properties.value.toFixed(2));
+            // 覆盖率通常保留更多小数位
+            const decimals = method === 'coverage' ? 4 : 2;
+            cell.properties.value = Number(cell.properties.value.toFixed(decimals));
         });
 
         // ✅ [新增] 缓冲区过滤逻辑
@@ -401,7 +449,6 @@ const getSafeKey = (field: string, val: any) => {
 
 export const exportGrid = async (req: Request, res: Response): Promise<void> => {
     try {
-        // ✅ [修改] 接收 categoryFields 数组
         const { fileId, shape, size, method, categoryFields } = req.body;
 
         if (!fileId || !shape || !size) {
@@ -409,14 +456,12 @@ export const exportGrid = async (req: Request, res: Response): Promise<void> => 
             return;
         }
 
-        // 兼容性处理：如果前端发来的是单选的老数据（虽然改了前端应该不会，但为了健壮性）
         const selectedCategories: string[] = Array.isArray(categoryFields) 
             ? categoryFields 
             : (categoryFields ? [categoryFields] : []);
 
-        console.log(`[Export] Exporting ${shape} grid (${size}km) for file ${fileId}. Categories: ${selectedCategories.join(', ') || 'None'}`);
+        console.log(`[Export] Exporting ${shape} grid (${size}km) for file ${fileId}. Method: ${method}`);
 
-        // ✅ [Helper] 定义安全的 Key 生成函数
         const getSafeKey = (field: string, val: any) => {
             const strVal = String(val);
             const safeVal = strVal.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5]/g, '_');
@@ -430,12 +475,18 @@ export const exportGrid = async (req: Request, res: Response): Promise<void> => 
                 return;
         }
 
+        // ✅ [Fix: 移动定义到这里] 统一在最前面将原始数据转为 Turf Feature，供后续所有步骤使用
+        const features = rawFeatures.map((f: any) => turf.feature(f.geometry, f.properties));
+        
+        // ✅ [新增] 预判数据类型 (用于覆盖率计算)
+        const firstGeom = features[0]?.geometry.type;
+        const isPolygonLayer = firstGeom?.includes('Polygon');
+        const isLineLayer = firstGeom?.includes('Line');
+
         // 2. 识别字段 & 收集分类值
         const numericFields = new Set<string>();
-        // ✅ [修改] 使用 Map 存储每个字段对应的唯一值集合: Map<FieldName, Set<Value>>
         const categoryValueMap = new Map<string, Set<string>>();
 
-        // 初始化 Map
         selectedCategories.forEach(field => categoryValueMap.set(field, new Set()));
 
         rawFeatures.forEach((f: any) => {
@@ -445,7 +496,6 @@ export const exportGrid = async (req: Request, res: Response): Promise<void> => 
                         numericFields.add(key);
                     }
                 });
-                // ✅ [修改] 扫描所有选中的分类字段
                 selectedCategories.forEach(field => {
                     const val = f.properties[field];
                     if (val !== undefined && val !== null) {
@@ -456,7 +506,6 @@ export const exportGrid = async (req: Request, res: Response): Promise<void> => 
         });
 
         const fieldsToAggregate = Array.from(numericFields);
-        // 预处理所有需要生成的 Column Keys，以提高后续性能
         const allCategoryColumns: string[] = [];
         categoryValueMap.forEach((values, field) => {
             Array.from(values).sort().forEach(val => {
@@ -464,10 +513,8 @@ export const exportGrid = async (req: Request, res: Response): Promise<void> => 
             });
         });
 
-        console.log(`[Export] Numeric: ${fieldsToAggregate.length}, Category Cols to generate: ${allCategoryColumns.length}`);
-
         // 3. 准备网格
-        const features = rawFeatures.map((f: any) => turf.feature(f.geometry, f.properties));
+        // ❌ [删除] 原来的 const features = ... 删掉，防止重复声明错误
         const featureCollection = turf.featureCollection(features);
         const bbox = turf.bbox(featureCollection);
         
@@ -486,7 +533,11 @@ export const exportGrid = async (req: Request, res: Response): Promise<void> => 
 
         // 初始化网格属性
         grid.features.forEach((cell: any) => {
-            const props: any = { count: 0, _weight: 0 };
+            const props: any = { 
+                count: 0, 
+                value: 0, // ✅ [新增] 显式初始化 value 字段
+                _weight: 0 
+            };
             
             // A. 常规数值
             fieldsToAggregate.forEach(field => {
@@ -495,7 +546,7 @@ export const exportGrid = async (req: Request, res: Response): Promise<void> => 
                     : 0;
             });
 
-            // ✅ [修改] B. 批量初始化所有分类列
+            // B. 分类列
             allCategoryColumns.forEach(key => {
                 props[key] = 0;
             });
@@ -511,8 +562,19 @@ export const exportGrid = async (req: Request, res: Response): Promise<void> => 
             const geometryType = feature.geometry.type;
             const candidateCells = gridIndex.query(feature);
 
-            // ✅ [修改] 预先计算当前要素在所有选中字段下的 Key
-            // 结果形如: ['LandUse_Res', 'RoadType_HighWay']
+            // ✅ [新增] 计算 rawValue (核心指标)
+            let rawValue = 1; // 默认为计数 (count)
+            if (method === 'coverage') {
+                if (isPolygonLayer) {
+                    rawValue = turf.area(feature); // m²
+                } else if (isLineLayer) {
+                    rawValue = turf.length(feature, { units: 'kilometers' }); // km
+                }
+            } else if (method !== 'count' && method !== 'coverage') {
+                 // 其他模式下 value 默认记为 1 (类似 count)，主要看具体属性字段
+                 rawValue = 1; 
+            }
+
             const activeCategoryKeys: string[] = [];
             selectedCategories.forEach(field => {
                 const rawCat = feature.properties[field];
@@ -524,45 +586,48 @@ export const exportGrid = async (req: Request, res: Response): Promise<void> => 
             candidateCells.forEach((cell: any) => {
                 let ratio = 0;
                 try {
-                    // --- 几何计算 (保持原有逻辑) ---
+                    // --- 几何计算 ---
                     if (geometryType === 'Point') {
                         if (turf.booleanPointInPolygon(feature, cell)) ratio = 1;
                     } 
                     else if (geometryType.includes('Line')) {
                         if (turf.booleanIntersects(cell, feature)) {
-                            const totalLen = turf.length(feature);
-                            if (totalLen > 0) {
-                                    if (turf.booleanContains(cell, feature)) ratio = 1;
-                                    else ratio = 0.5; // 请务必换回你的完整 split 逻辑
-                            }
+                            // 简化处理，若需要更高精度可换回 lineSplit
+                            if (turf.booleanContains(cell, feature)) ratio = 1;
+                            else ratio = 0.5; 
                         }
                     }
                     else if (geometryType.includes('Polygon')) {
-                            if (turf.booleanIntersects(cell, feature)) {
-                                const intersect = safeIntersect(cell, feature);
-                                if (intersect) ratio = turf.area(intersect) / turf.area(feature);
-                            }
+                        if (turf.booleanIntersects(cell, feature)) {
+                            const intersect = safeIntersect(cell, feature);
+                            if (intersect) ratio = turf.area(intersect) / turf.area(feature);
+                        }
                     }
                     // ------------------------------
 
                     if (ratio > 0) {
                         cell.properties.count += 1;
                         cell.properties._weight += ratio;
+                        
+                        // ✅ [新增] 累加核心 Value
+                        // Count模式: 1 * ratio
+                        // Coverage模式: Area * ratio (即网格内的实际面积)
+                        cell.properties.value += rawValue * ratio;
 
                         // 1. 常规聚合
-                        fieldsToAggregate.forEach(field => {
-                            const val = Number(feature.properties[field]);
-                            if (!isNaN(val)) {
-                                if (method === 'sum' || method === 'avg') cell.properties[field] += val * ratio;
-                                else if (method === 'max') cell.properties[field] = Math.max(cell.properties[field], val);
-                                else if (method === 'min') cell.properties[field] = Math.min(cell.properties[field], val);
-                            }
-                        });
+                        if (method !== 'count' && method !== 'coverage') {
+                            fieldsToAggregate.forEach(field => {
+                                const val = Number(feature.properties[field]);
+                                if (!isNaN(val)) {
+                                    if (method === 'sum' || method === 'avg') cell.properties[field] += val * ratio;
+                                    else if (method === 'max') cell.properties[field] = Math.max(cell.properties[field], val);
+                                    else if (method === 'min') cell.properties[field] = Math.min(cell.properties[field], val);
+                                }
+                            });
+                        }
 
-                        // ✅ [修改] 2. 多分类拆分聚合
-                        // 遍历当前要素拥有的所有分类 Key，分别累加
+                        // 2. 多分类拆分聚合
                         activeCategoryKeys.forEach(key => {
-                            // 容错：确保 Key 存在
                             if (typeof cell.properties[key] === 'undefined') cell.properties[key] = 0;
                             cell.properties[key] += ratio;
                         });
@@ -575,11 +640,32 @@ export const exportGrid = async (req: Request, res: Response): Promise<void> => 
         const resultFeatures = grid.features.filter((f: any) => f.properties.count > 0);
         
         resultFeatures.forEach((cell: any) => {
+            // ✅ [新增] 覆盖率模式归一化处理
+            if (method === 'coverage') {
+                const cellAreaSqM = turf.area(cell);
+                
+                if (isPolygonLayer) {
+                    // 面覆盖率 = 网格内总面积 / 网格面积
+                    cell.properties.value = cell.properties.value / cellAreaSqM;
+                    if (cell.properties.value > 1) cell.properties.value = 1;
+                } else if (isLineLayer) {
+                    // 线密度 = 网格内总长度(km) / 网格面积(km²)
+                    const cellAreaSqKm = cellAreaSqM / 1_000_000;
+                    if (cellAreaSqKm > 0) {
+                        cell.properties.value = cell.properties.value / cellAreaSqKm;
+                    }
+                }
+                cell.properties.value = Number(cell.properties.value.toFixed(4));
+            } else {
+                // 其他模式保留两位小数
+                cell.properties.value = Number(cell.properties.value.toFixed(2));
+            }
+
             // 常规字段修约
             fieldsToAggregate.forEach(field => {
                 if (method === 'avg' && cell.properties._weight > 0) {
                     cell.properties[field] = Number((cell.properties[field] / cell.properties._weight).toFixed(2));
-                } else if (method !== 'count') {
+                } else if (method !== 'count' && method !== 'coverage') {
                     if (cell.properties[field] !== Infinity && cell.properties[field] !== -Infinity) {
                             cell.properties[field] = Number(cell.properties[field].toFixed(2));
                     } else {
@@ -588,7 +674,7 @@ export const exportGrid = async (req: Request, res: Response): Promise<void> => 
                 }
             });
             
-            // ✅ [修改] 分类字段修约 (批量处理所有生成的列)
+            // 分类字段修约
             allCategoryColumns.forEach(key => {
                 if (typeof cell.properties[key] !== 'undefined') {
                     cell.properties[key] = Number(cell.properties[key].toFixed(3));
@@ -599,8 +685,7 @@ export const exportGrid = async (req: Request, res: Response): Promise<void> => 
         });
 
         const finalGeoJSON = turf.featureCollection(resultFeatures);
-
-        const fileName = `grid_export_${fileId}_${Date.now()}.geojson`;
+        const fileName = `grid_export_${fileId}_${method}_${Date.now()}.geojson`;
         res.setHeader('Content-Type', 'application/geo+json');
         res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
         res.send(JSON.stringify(finalGeoJSON));

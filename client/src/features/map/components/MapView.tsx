@@ -35,25 +35,44 @@ interface MapViewProps {
     onFeatureClick?: (feature: any) => void;
 }
 
-// ✅ [修改] 扩展 GridConfig 接口，支持多选
+// ✅ [修改] 扩展 GridConfig 接口，增加 coverage
 interface GridConfig {
     shape: 'hex' | 'square';
     size: number;
-    method: 'count' | 'sum' | 'avg' | 'max' | 'min';
+    // 添加 'coverage'
+    method: 'count' | 'sum' | 'avg' | 'max' | 'min' | 'coverage'; 
     targetField: string | null;
-    categoryFields: string[]; // 改为数组
+    categoryFields: string[];
 }
 
 // --- 配置常量 ---
-// 1. 预设颜色方案 (Color Schemes)
+// ✅ [修改] 1. 升级配色方案库：提供高区分度的色阶 (High Distinction Palettes)
 const COLOR_SCHEMES = {
-    default: { name: '默认青色', colors: ['#00e5ff', '#00e5ff'] },
-    magma: { name: '岩浆 (Magma)', colors: ['#000004', '#3b0f70', '#8c2981', '#de4968', '#fe9f6d', '#fcfdbf'] },
-    viridis: { name: '翠绿 (Viridis)', colors: ['#440154', '#414487', '#2a788e', '#22a884', '#7ad151', '#fde725'] },
-    plasma: { name: '等离子 (Plasma)', colors: ['#0d0887', '#6a00a8', '#b12a90', '#e16462', '#fca636', '#f0f921'] },
-    blues: { name: '海洋蓝 (Blues)', colors: ['#f7fbff', '#deebf7', '#c6dbef', '#9ecae1', '#6baed6', '#4292c6', '#2171b5', '#084594'] },
-    reds: { name: '火焰红 (Reds)', colors: ['#fff5f0', '#fee0d2', '#fcbba1', '#fc9272', '#fb6a4a', '#ef3b2c', '#cb181d', '#99000d'] },
-    // reds: { name: '火焰红 (Reds)', colors: ['#fff5f0', '#99000d'] },
+    // A. 经典红黄蓝 (适合展示差异，对比极强)
+    rdylbu: { 
+        name: '红黄蓝 (RdYlBu)', 
+        colors: ['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#fee090', '#fdae61', '#f46d43', '#d73027', '#a50026'] 
+    },
+    // B. 科学可视化 (Viridis) - 深色底图最佳拍档，亮度变化均匀
+    viridis: { 
+        name: '极光绿 (Viridis)', 
+        colors: ['#440154', '#482878', '#3e4989', '#31688e', '#26828e', '#1f9e89', '#35b779', '#6ece58', '#b5de2b', '#fde725'] 
+    },
+    // C. 烈焰红 (Magma) - 暖色系，高对比度
+    magma: { 
+        name: '烈焰红 (Magma)', 
+        colors: ['#000004', '#140e36', '#3b0f70', '#641a80', '#8c2981', '#b73779', '#de4968', '#f1705b', '#fe9f6d', '#fcfdbf'] 
+    },
+    // D. 深海蓝 (Ocean) - 清新单色系，分层明显
+    blues: { 
+        name: '深海蓝 (Blues)', 
+        colors: ['#f7fbff', '#deebf7', '#c6dbef', '#9ecae1', '#6baed6', '#4292c6', '#2171b5', '#08519c', '#08306b'] 
+    },
+    // E. 默认青色 (保留一个简单的)
+    default: { 
+        name: '科技青 (Default)', 
+        colors: ['#e0f7fa', '#b2ebf2', '#80deea', '#4dd0e1', '#26c6da', '#00bcd4', '#00acc1', '#0097a7', '#00838f', '#006064'] 
+    },
 };
 
 // ✅ [新增] 颜色插值辅助函数 (Hex -> RGB -> Interpolate -> Hex)
@@ -89,7 +108,7 @@ function interpolateColor(color1: string, color2: string, factor: number) {
 const BASEMAPS = [
     {
         key: 'dark',
-        name: '暗夜黑 (Dark)',
+        name: 'Dark',
         style: {
             version: 8,
             sources: {
@@ -105,7 +124,7 @@ const BASEMAPS = [
     },
     {
         key: 'light',
-        name: '简洁白 (Light)',
+        name: 'Light',
         style: {
             version: 8,
             sources: {
@@ -121,7 +140,7 @@ const BASEMAPS = [
     },
     {
         key: 'satellite',
-        name: '卫星图 (天地图)',
+        name: '卫星图',
         style: {
             version: 8,
             sources: {
@@ -155,7 +174,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
     const [stringFields, setStringFields] = useState<string[]>([]);
 
     const [activeField, setActiveField] = useState<string | null>(null); // 当前选中的映射字段
-    const [activeScheme, setActiveScheme] = useState<string>('default'); // 当前颜色方案
+    const [activeScheme, setActiveScheme] = useState<string>('viridis'); // 当前颜色方案
     const [activeBasemap, setActiveBasemap] = useState<string>('dark'); // 当前底图
     
     // ✅状态管理 - 全量数据相关
@@ -343,8 +362,9 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
             message.error("无法获取文件ID，请先保存文件");
             return;
         }
-        if (gridConfig.method !== 'count' && !gridConfig.targetField) {
-            message.warning("非计数模式下，请选择一个数值字段");
+        // ✅ 修正逻辑：计数(count) 和 覆盖率(coverage) 都不需要选择数值字段
+        if (gridConfig.method !== 'count' && gridConfig.method !== 'coverage' && !gridConfig.targetField) {
+            message.warning("非计数/覆盖率模式下，请选择一个数值字段");
             return;
         }
 
@@ -411,7 +431,12 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
         // 1. 填充层
         map.addLayer({
             id: 'geo-fill-layer', type: 'fill', source: sourceId,
-            paint: { 'fill-color': '#00e5ff', 'fill-opacity': 0.6 },
+            paint: { 
+                'fill-color': '#00e5ff', 
+                'fill-opacity': 0.6,
+                // ✅ [修改] 智能边框：网格模式透明，普通模式保留淡淡的轮廓
+                'fill-outline-color': isGridMode ? 'rgba(0,0,0,0)' : 'rgba(0,0,0,0.1)' 
+            },
             filter: ['==', '$type', 'Polygon']
         });
         // 2. ✅ 面边框图层 (Polygon Border) - 只渲染 Polygon 的轮廓
@@ -419,9 +444,11 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
         map.addLayer({
             id: 'geo-polygon-border', type: 'line', source: sourceId,
             paint: { 
-                'line-color': '#a5f3fc', 
-                'line-width': 1, 
-                'line-opacity': 0.5 
+                // 使用极低透明度的白色或黑色，取决于你的底图，这里用通用淡白
+                'line-color': 'rgba(255, 255, 255, 0.08)', 
+                // ✅ [修改] 智能线宽：网格模式隐藏(0)，普通模式显示(1)
+                'line-width': isGridMode ? 0 : 1,
+                'line-opacity': 0.5
             },
             filter: ['==', '$type', 'Polygon']
         });
@@ -723,11 +750,14 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
             // 面图层
             if (map.getLayer('geo-fill-layer')) {
                 map.setPaintProperty('geo-fill-layer', 'fill-opacity', 0.6);
+                // ✅ [修改] 恢复时也看模式
+                map.setPaintProperty('geo-fill-layer', 'fill-outline-color', isGridMode ? 'rgba(0,0,0,0)' : 'rgba(0,0,0,0)');
             }
             
             // 面边框 (Polygon Border)
             if (map.getLayer('geo-polygon-border')) {
-                map.setPaintProperty('geo-polygon-border', 'line-width', 1);
+                // ✅ [修改] 恢复时也看模式
+                map.setPaintProperty('geo-polygon-border', 'line-width', isGridMode ? 0 : 1);
                 map.setPaintProperty('geo-polygon-border', 'line-color', activeBasemap === 'light' ? '#666' : '#a5f3fc');
             }
 
@@ -749,7 +779,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
     };
 
     /**
-     * 更新颜色映射 (Choropleth)
+     * ✅ [修改] 更新颜色映射 (Choropleth) - 采用“分段阶梯”渲染以增强区分度
      */
     const updateChoroplethColors = () => {
         // 卫兵：如果开启了联动模式且符合条件，直接退出
@@ -758,12 +788,15 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
 
         const map = mapInstance.current;
         const currentDisplayData = displayDataRef.current;
-        // ✅这里也改为使用 displayData
+        
         if (!map || !map.getLayer('geo-fill-layer') || !currentDisplayData) return;
 
         // 1. 如果没有选字段，恢复默认颜色
         if (!activeField || activeField === 'none') {
             map.setPaintProperty('geo-fill-layer', 'fill-color', '#00e5ff');
+            // ✅ [修改] 恢复默认时，清除边框或设为透明
+            map.setPaintProperty('geo-fill-layer', 'fill-outline-color', 'rgba(0,0,0,0)'); 
+            map.setPaintProperty('geo-fill-layer', 'fill-opacity', 0.6);
             return;
         }
 
@@ -785,51 +818,58 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
 
         if (min === Infinity || max === -Infinity) return; // 没数据
         
-        // ✅ [核心修复] 处理 min === max 的情况
-        // 你的报错就是因为 min=0, max=0 导致插值表达式只有 [0, color, 0, color...]，违反了 strictly ascending 规则
+        // 处理 min === max 的情况
         if (min === max) {
-            // 取中间色，或第一个颜色
             const singleColor = colors[Math.floor(colors.length / 2)];
-            
-            if (map.getLayer('geo-fill-layer')) map.setPaintProperty('geo-fill-layer', 'fill-color', singleColor);
+            if (map.getLayer('geo-fill-layer')) {
+                map.setPaintProperty('geo-fill-layer', 'fill-color', singleColor);
+                map.setPaintProperty('geo-fill-layer', 'fill-outline-color', 'rgba(0,0,0,0.05)');
+            }
             if (map.getLayer('geo-linestring-main')) map.setPaintProperty('geo-linestring-main', 'line-color', singleColor);
             if (map.getLayer('geo-point-layer')) map.setPaintProperty('geo-point-layer', 'circle-color', singleColor);
-            return; // 重要：处理完直接返回，不再执行下面的 interpolate
+            return; 
         }
 
-        // 4. 构建插值表达式 (Linear Interpolation)
-        const step = (max - min) / (colors.length - 1);
+        // ✅ [核心修改] 使用 'step' (阶梯) 表达式代替 'interpolate' (线性)
+        // Step 能让颜色分层更明显，哪怕数值差异很小，也会被强制划分到不同的颜色块中
         
-        // Mapbox 样式规范中标准的表达式语法。它是一个数组，会被直接传给 GPU
-        // 'interpolate'指令。告诉地图引擎：“我要做一个渐变效果，不是突变的
-        // ['linear']线性插值
-        // ['get', activeField]，这是输入变量，读取当前这个多边形（Feature）里名为 activeField（比如 'GDP'）的属性值
-        const expression: any[] = ['interpolate', ['linear'], ['get', activeField]];
+        const stepCount = colors.length;
+        const stepSize = (max - min) / stepCount;
+
+        // 构造 step 表达式: ['step', ['get', field], color0, stop1, color1, stop2, color2 ...]
+        // 意思是：小于 stop1 用 color0，小于 stop2 用 color1 ... 以此类推
+        const expression: any[] = ['step', ['get', activeField]];
         
-        // 注意，因为这里设置了['linear']线性插值，所以如果是计算数值区间之间的值，会显示混合渐变色
-        colors.forEach((color: string, index: number) => {
-            expression.push(min + step * index);
-            expression.push(color);
-        });
+        // 初始颜色 (小于第一个断点的值用这个颜色)
+        expression.push(colors[0]);
+
+        for (let i = 1; i < stepCount; i++) {
+            const stopValue = min + (stepSize * i);
+            expression.push(stopValue); // 断点
+            expression.push(colors[i]); // 该区间颜色
+        }
+
+        console.log(`🎨 颜色分层更新: Field=${activeField}, Mode=Step, Range=[${min}, ${max}]`);
 
         // 5. 应用到地图
-        // ✅ [修复] 应用颜色到新图层
-        // 面数据：填充色变，边框保持默认
         if (map.getLayer('geo-fill-layer')) {
             map.setPaintProperty('geo-fill-layer', 'fill-color', expression);
+            map.setPaintProperty('geo-fill-layer', 'fill-opacity', 0.85); 
+            
+            // ✅ [修改] 动态设置描边：网格模式下强制透明，普通模式下给一点点描边
+            const outlineColor = isGridMode ? 'rgba(0,0,0,0)' : 'rgba(0,0,0,0.05)';
+            map.setPaintProperty('geo-fill-layer', 'fill-outline-color', outlineColor);
         }
         
-        // 线数据：线条本身变色
+        // 线数据：也使用分段颜色
         if (map.getLayer('geo-linestring-main')) {
             map.setPaintProperty('geo-linestring-main', 'line-color', expression);
         }
         
-        // 点数据
+        // 点数据：也使用分段颜色
         if (map.getLayer('geo-point-layer')) {
             map.setPaintProperty('geo-point-layer', 'circle-color', expression);
         }
-        
-        console.log(`🎨 颜色映射更新: Field=${activeField}, Range=[${min}, ${max}]`);
     };
 
 // ✅ [修改] Effect 1: 仅处理“数据几何渲染” (Geometry)
@@ -1088,6 +1128,8 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                         onChange={(val) => setGridConfig(prev => ({ ...prev, method: val as any }))}
                         options={[
                             { label: '计数 (Count)', value: 'count' },
+                            // ✅ [新增] 覆盖率选项
+                            { label: '覆盖率/密度 (Coverage)', value: 'coverage' }, 
                             { label: '求和 (Sum)', value: 'sum' },
                             { label: '平均 (Avg)', value: 'avg' },
                             { label: '最大 (Max)', value: 'max' },
@@ -1104,11 +1146,11 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                         size="small"
                         className="w-full"
                         placeholder="选择字段"
-                        disabled={gridConfig.method === 'count'}
+                        // ✅ [修改] 当选择 coverage 时也禁用字段选择
+                        disabled={gridConfig.method === 'count' || gridConfig.method === 'coverage'}
                         value={gridConfig.targetField}
                         onChange={(val) => setGridConfig(prev => ({ ...prev, targetField: val }))}
                         options={numericFields.filter(f => f !== 'value').map(f => ({ label: f, value: f }))} 
-                        // ✅ [修复] 同上
                         styles={{ popup: { root: { border: '1px solid #334155' } } }}
                     />
                 </div>
@@ -1282,7 +1324,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                                     <DeploymentUnitOutlined className={`text-lg mr-2 ${isGridMode ? 'animate-pulse' : 'text-yellow-500'}`} />
                                 </Badge>
                                 <span className="text-xs font-bold whitespace-nowrap">
-                                    {isGridMode ? '网格视图' : '空间聚合'}
+                                    {isGridMode ? '网格视图' : '网格聚合'}
                                 </span>
                             </div>
                         </Popover>
