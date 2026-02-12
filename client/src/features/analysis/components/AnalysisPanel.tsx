@@ -8,7 +8,9 @@ import {
     FunctionOutlined,
     ExperimentOutlined,
     AreaChartOutlined,
-    ThunderboltOutlined
+    DeploymentUnitOutlined, // ✅ [新增] 用这个图标代表山脊图/分段
+    ThunderboltOutlined,
+    BoxPlotOutlined // ✅ [新增] 引入图标
 } from '@ant-design/icons';
 import { useAnalysisStore } from '../../../stores/useAnalysisStore';
 import apiClient from '../../../services/apiClient';
@@ -40,8 +42,8 @@ const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ fileId, fields }) => {
     const handlePivotAnalyze = async () => {
         if (!fileId) { message.warning('请先在工作空间选择一个文件'); return; }
         if (!pivotConfig.groupByRow) { message.warning('请至少选择行分组字段'); return; }
+        // ✅ [修改] 箱线图模式下也需要 valueField
         if (pivotConfig.method !== 'count' && !pivotConfig.valueField) { message.warning('请选择统计字段 (Value)'); return; }
-
         setLoading(true);
         try {
             const res = await apiClient.post('/analysis/pivot', {
@@ -55,7 +57,16 @@ const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ fileId, fields }) => {
             if (res.data.success) {
                 setPivotResult(res.data.data, res.data.columns);
                 setPivotPanelOpen(true);
-                setChartType('Bar'); 
+                
+                // ✅ [新增] 自动切换图表类型
+                if (pivotConfig.method === 'boxplot') {
+                    setChartType('BoxPlot'); 
+                } else if (pivotConfig.method === 'ridgeline') {
+                    setChartType('Ridgeline'); // 自动切到山脊图
+                } else {
+                    setChartType('Bar'); 
+                }
+                
                 setChartVisible(true);
                 message.success('透视分析完成');
             }
@@ -168,22 +179,56 @@ const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ fileId, fields }) => {
                                         </Form.Item>
                                         <div className="grid grid-cols-2 gap-3 mt-3">
                                             <Form.Item label={<span className="text-gray-400 text-xs">列分组 (Col)</span>} className="mb-0">
-                                                <Select className="w-full" placeholder="可选" allowClear value={pivotConfig.groupByCol} onChange={(val) => setPivotConfig({ groupByCol: val })} showSearch>
+                                                <Select 
+                                                    className="w-full" placeholder="可选" allowClear 
+                                                    value={pivotConfig.groupByCol} 
+                                                    onChange={(val) => setPivotConfig({ groupByCol: val })} 
+                                                    showSearch
+                                                    // ✅ [修改] 分段模式下禁用列
+                                                    disabled={pivotConfig.method === 'boxplot' || pivotConfig.method === 'ridgeline'}
+                                                >
                                                     {fields.map(f => <Option key={f} value={f}>{f}</Option>)}
-                                                </Select>
+                                                </Select>   
                                             </Form.Item>
                                             <Form.Item label={<span className="text-gray-400 text-xs">聚合方式</span>} className="mb-0">
-                                                <Select className="w-full" value={pivotConfig.method} onChange={(val) => setPivotConfig({ method: val })}>
+                                                <Select className="w-full" value={pivotConfig.method} onChange={(val) => {
+                                                    setPivotConfig({ 
+                                                        method: val,
+                                                        // ✅ [修改] 选中 raw 模式时清空列
+                                                        groupByCol: (val === 'boxplot' || val === 'ridgeline') ? null : pivotConfig.groupByCol
+                                                    })
+                                                }}>
                                                     <Option value="count">计数</Option>
                                                     <Option value="sum">求和</Option>
                                                     <Option value="avg">平均</Option>
                                                     <Option value="max">最大</Option>
                                                     <Option value="min">最小</Option>
+                                                    <Option value="boxplot">
+                                                        <span className="flex items-center gap-2">
+                                                            <BoxPlotOutlined className="text-purple-400"/>
+                                                            <span>箱线图(分布)</span>
+                                                        </span>
+                                                    </Option>
+                                                    {/* ✅ [新增] 分段/山脊图选项 */}
+                                                    <Option value="ridgeline">
+                                                        <span className="flex items-center gap-2">
+                                                            <DeploymentUnitOutlined className="text-emerald-400"/>
+                                                            <span>山脊图(分布)</span>
+                                                        </span>
+                                                    </Option>
                                                 </Select>
                                             </Form.Item>
                                         </div>
                                         <Form.Item label={<span className="text-gray-400 text-xs">统计值 (Value)</span>} className="mt-3 mb-5">
-                                            <Select className="w-full" placeholder="选择字段" value={pivotConfig.valueField} onChange={(val) => setPivotConfig({ valueField: val })} disabled={pivotConfig.method === 'count'} showSearch>
+                                            <Select 
+                                                className="w-full" 
+                                                placeholder="选择字段" 
+                                                value={pivotConfig.valueField} 
+                                                onChange={(val) => setPivotConfig({ valueField: val })} 
+                                                // ✅ [修改] boxplot 模式下也必须选字段
+                                                disabled={pivotConfig.method === 'count'} 
+                                                showSearch
+                                            >
                                                 {fields.map(f => <Option key={f} value={f}>{f}</Option>)}
                                             </Select>
                                         </Form.Item>

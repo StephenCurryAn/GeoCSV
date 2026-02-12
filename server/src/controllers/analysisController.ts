@@ -102,6 +102,10 @@ export const pivotAnalysis = async (req: Request, res: Response) => {
                 case 'avg': accumulator = { $avg: fieldPath }; break;
                 case 'max': accumulator = { $max: fieldPath }; break;
                 case 'min': accumulator = { $min: fieldPath }; break;
+                // ✅ [新增] 核心逻辑：使用 $push 收集所有原始值
+                case 'boxplot': accumulator = { $push: fieldPath }; break;
+                // ✅ [新增] 分段/山脊图模式：同样收集原始数组
+                case 'ridgeline': accumulator = { $push: fieldPath }; break;
                 default: accumulator = { $sum: fieldPath };
             }
         }
@@ -126,6 +130,10 @@ export const pivotAnalysis = async (req: Request, res: Response) => {
         } else {
             // --- 模式 B: 二维透视 (行转列) ---
             // 第一步：联合分组 (Row + Col)
+            // ✅ [新增] 二维模式不支持 raw array 聚合
+            if (method === 'boxplot' || method === 'ridgeline') {
+                return res.status(400).json({ message: 'Raw collection methods do not support 2D pivoting.' });
+            }
             pipeline.push({
                 $group: {
                     _id: {
@@ -146,11 +154,17 @@ export const pivotAnalysis = async (req: Request, res: Response) => {
         if (!cField) {
             // 1D 格式化
             finalData = rawResults.map((item, idx) => ({
-                key: idx, // React 需要 key
-                rowKey: item._id || '未分类', // 统一叫 rowKey 方便前端渲染
-                value: typeof item.value === 'number' ? parseFloat(item.value.toFixed(2)) : item.value
+                key: idx,
+                rowKey: item._id || '未分类',
+                // ✅ [修改] 允许 ridgeline 返回数组
+                value: (method === 'boxplot' || method === 'ridgeline')
+                    ? item.value 
+                    : (typeof item.value === 'number' ? parseFloat(item.value.toFixed(2)) : item.value)
             }));
-            dynamicColumns = ['value'];
+            // 标记列类型
+            if (method === 'boxplot') dynamicColumns = ['boxplot_raw'];
+            else if (method === 'ridgeline') dynamicColumns = ['ridgeline_raw'];
+            else dynamicColumns = ['value'];
         } else {
             // 2D 格式化 (Matrix 转置)
             const map = new Map<string, any>();

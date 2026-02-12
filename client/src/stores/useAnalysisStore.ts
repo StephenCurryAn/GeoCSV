@@ -5,7 +5,7 @@ export interface PivotConfig {
     groupByRow: string | null;
     groupByCol: string | null;
     valueField: string | null;
-    method: 'sum' | 'avg' | 'count' | 'max' | 'min';
+    method: 'sum' | 'avg' | 'count' | 'max' | 'min' | 'boxplot' | 'ridgeline';
 }
 
 // ✅ 新增：散点图配置接口
@@ -13,9 +13,9 @@ export interface ScatterConfig {
     xField: string | null;
     yField: string | null;
 }
+// ✅ [修改] 添加 'Ridgeline' 到图表类型
+export type ChartType = 'Bar' | 'Radar' | 'Scatter' | 'Pie' | 'Heatmap' | 'BoxPlot' | 'Ridgeline';
 
-// ✅ 新增：图表类型定义
-export type ChartType = 'Bar' | 'Radar' | 'Scatter' | 'Pie';
 // ✅ [修改] 扩展支持的色系 Key，增加渐变色系
 export type ColorThemeType = 
     // 单色系 (Opacity Mode)
