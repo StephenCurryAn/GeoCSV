@@ -151,7 +151,7 @@ const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ fileId, fields }) => {
                                 <div className="p-1.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
                                     <BarChartOutlined />
                                 </div>
-                                <span className="text-sm font-bold text-gray-200">统计探索</span>
+                                <span className="text-sm font-bold text-gray-200">统计分析</span>
                             </div>
                         </div>
 

@@ -111,7 +111,7 @@ const MainLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
       >
         <div className={`w-full h-full flex flex-col ${sidebarWidth < MIN_SIDEBAR_WIDTH ? 'opacity-0' : 'opacity-100'} transition-opacity duration-100`}>
           <div className="h-12 flex items-center px-4 border-b border-geo-border">
-            <h2 className="text-sm font-medium text-geo-text-primary">资源管理器</h2>
+            <h2 className="text-sm font-medium text-geo-text-primary">工作空间</h2>
           </div>
           <div className="flex-1 overflow-auto p-2">
             {childrenArray[0]}

@@ -30,7 +30,7 @@ const LeftPanel: React.FC<LeftPanelProps> = ({ onDataLoaded, onSelectFile, activ
           onChange={(val) => setActiveTab(val as string)}
           options={[
             { 
-              label: '工作空间', 
+              label: '资源管理', 
               value: 'workspace', 
               icon: <AppstoreOutlined /> 
             },

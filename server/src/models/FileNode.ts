@@ -6,18 +6,18 @@ import path from 'path'; // 用于自动提取后缀
 
 // extends Document:继承 Mongoose 文档的基础功能（比如 _id 属性，save() 方法等）
 export interface IFileNode extends Document {
-  name: string;          // 文件名 (例如: "data.csv")
+  name: string;          // 文件名
   type: 'file' | 'folder';
   parentId: mongoose.Types.ObjectId | null;
-  path?: string;         // 物理存储路径 (例如: "uploads/file-123.csv")
+  path?: string;         // 物理存储路径
   size?: number;         // 字节大小
-  extension?: string;    // ✅ 新增: 文件后缀 (例如: ".csv")
-  mimeType?: string;     // ✅ 建议新增: MIME类型 (例如: "text/csv")，方便前端展示图标
+  extension?: string;    // 后缀
+  mimeType?: string;
   createdAt: Date;
   updatedAt: Date;
-  // _id 是 MongoDB 自动生成的，虽然你没写，但它是数据库的默认主键规则
-}
 
+}
+  // _id 是 MongoDB 自动生成的，虽然你没写，但它是数据库的默认主键规则
 // 2. 定义 Schema(数据库模式)
 const fileNodeSchema: Schema<IFileNode> = new Schema({
   name: {
