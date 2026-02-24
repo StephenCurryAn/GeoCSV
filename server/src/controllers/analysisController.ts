@@ -1,7 +1,20 @@
 import { Request, Response } from 'express';
 import Feature from '../models/Feature';
+import ModelRegistry from '../models/ModelRegistry';
 import mongoose from 'mongoose';
 import * as turf from '@turf/turf';
+import axios from 'axios';
+import fs from 'fs';
+import path from 'path';
+
+// WSL2 中 FastAPI 运行的地址
+const PYTHON_API_URL = 'http://127.0.0.1:8000/api';
+// 1. 定义 Python API 的返回结构
+interface PythonApiResponse {
+  status: string;
+  result_array: number[]; // 明确告诉 TS 这是一个数字数组
+  execution_time_ms: number;
+}
 
 // 简易空间索引
 class SimpleGridIndex {
@@ -709,3 +722,124 @@ export const exportGrid = async (req: Request, res: Response): Promise<void> => 
         res.status(500).json({ error: 'Export failed' });
     }
 }
+
+// 供前端查询可用模型列表（用于生成公式下拉提示）
+export const getAvailableModels = async (req: Request, res: Response) => {
+  try {
+    const models = await ModelRegistry.find({ status: 'active' });
+    res.json({ code: 200, data: models });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// ==========================================
+// LLM 智能体代理注册接口 (API 机械臂)
+// ==========================================
+export const registerModelByAI = async (req: Request, res: Response) => {
+  try {
+    // 接收 LLM 生成的模型名称、描述、参数规范，以及最关键的：Python 源代码字符串
+    const { modelName, displayName, description, parameters, pythonCode } = req.body;
+
+    if (!pythonCode) {
+      return res.status(400).json({ error: '智能体未能提供有效的 Python 代码' });
+    }
+
+    // 步骤 A：物理隔离写入（绝对不碰 main.py，只向 models 文件夹注入“零件”）
+    // 解析出 python_engine/models 的绝对路径 (根据你的目录结构可能需要微调 ../ 的数量)
+    const modelsDir = path.join(process.cwd(), '../python_engine/models');
+    
+    // 确保 models 文件夹存在
+    if (!fs.existsSync(modelsDir)) {
+      fs.mkdirSync(modelsDir, { recursive: true });
+    }
+
+    // 将 AI 写的代码保存为 .py 文件（例如 lsi_ahp.py）
+    const fileName = `${modelName.toLowerCase()}.py`;
+    const filePath = path.join(modelsDir, fileName);
+    fs.writeFileSync(filePath, pythonCode, 'utf8');
+
+    // 步骤 B：元数据落库（记录在案，供前端动态读取公式列表）
+    const newModel = await ModelRegistry.findOneAndUpdate(
+      { modelName: modelName.toUpperCase() }, // 统一大写，如 LSI_AHP
+      { 
+        modelName: modelName.toUpperCase(), 
+        displayName, 
+        description, 
+        parameters, 
+        status: 'active' 
+      },
+      { upsert: true, new: true } // 如果存在则更新，不存在则创建
+    );
+
+    res.json({ 
+      code: 200, 
+      message: `智能体已成功将模型 ${modelName} 注入系统并注册完毕！`, 
+      data: newModel 
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: '模型代理注册失败: ' + error.message });
+  }
+};
+
+// ==========================================
+// 2. 核心数据透视接口 (高速数据泵)
+// ==========================================
+export const executeTableFormula = async (req: Request, res: Response) => {
+  try {
+    const { fileId, modelName, columns, params } = req.body;
+    
+    const modelDef = await ModelRegistry.findOne({ modelName: modelName.toUpperCase() });
+    if (!modelDef) return res.status(404).json({ error: '模型未注册' });
+
+    // 从数据库中极速提取所需数据，并进行终极防呆处理 (空值补0)
+    const features = await Feature.find({ fileId }).lean(); 
+    const attributeData = features.map(f => {
+      const row: any = {};
+      columns.forEach((col: string) => { 
+        const val = f.properties[col];
+        if (val === undefined || val === null || val === '') {
+            row[col] = 0;
+        } else {
+            row[col] = val;
+        }
+      });
+      return row;
+    });
+
+    // 内存极速转发给 Python (使用 axios)
+    const response = await axios.post<PythonApiResponse>(`${PYTHON_API_URL}/models/execute`, {
+      model_name: modelName,
+      data: attributeData,
+      parameters: params || {}
+    });
+
+    const resultArray = response.data.result_array;
+    const resultColName = `${modelName}_Score`;
+
+    // 🌟 组装带 ID 的结果返回给前端
+    const resultData: any[] = []; 
+    
+    const bulkOps = features.map((f, index) => {
+      const score = resultArray[index];
+      f.properties[resultColName] = score;
+
+      // 提取当前要素的唯一标识
+      const rowId = f.properties.id || f._id.toString();
+      resultData.push({ id: rowId, score: score });
+
+      return {
+        updateOne: { filter: { _id: f._id }, update: { $set: { properties: f.properties } } }
+      };
+    });
+    
+    Feature.bulkWrite(bulkOps).catch(err => console.error("回写数据库失败", err));
+
+    // 🌟 绝对确认：这里返回的是 resultData！
+    res.json({ code: 200, resultColName, resultData });
+
+  } catch (error: any) {
+    console.error("模型执行错误:", error.response?.data || error.message);
+    res.status(500).json({ error: '模型执行异常', details: error.response?.data?.detail || error.message });
+  }
+};

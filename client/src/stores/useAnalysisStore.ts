@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+// 🌟 修改：顶部导入刚刚写好的服务
+import { geoService } from '../services/geoService';
 
 // 透视配置接口
 export interface PivotConfig {
@@ -65,6 +67,8 @@ interface AnalysisState {
     // 比如用户点击了 "2021" 年的柱子，这里就存 "2021"
     activeColumn: string | null;
     setActiveColumn: (col: string | null) => void;
+
+    executeFormula: (fileId: string, formulaString: string, gridApi: any) => Promise<void>;
 }
 
 export const useAnalysisStore = create<AnalysisState>((set) => ({
@@ -118,4 +122,48 @@ export const useAnalysisStore = create<AnalysisState>((set) => ({
     // ✅ [新增] 初始化
     activeColumn: null,
     setActiveColumn: (col) => set({ activeColumn: col }),
+
+    // 🌟 新增：解析类 Excel 公式并执行的核心方法
+    executeFormula: async (fileId, formulaString, gridApi) => {
+        // 正则解析：形如 =LSI_AHP(slope, elevation, rainfall)
+        const regex = /^=([a-zA-Z0-9_]+)\((.*)\)$/;
+        const match = formulaString.match(regex);
+        
+        if (match) {
+        const modelName = match[1]; // 拿到 LSI_AHP
+        // 提取列名数组，去掉首尾空格
+        const columns = match[2].split(',').map((s: string) => s.trim());
+        
+        try {
+            // 调用后端
+            const data = await geoService.executeModelFormula(fileId, modelName, columns);
+            
+            // --- 结果回填 AG Grid ---
+            const newColName = data.resultColName;
+            const resultArray = data.resultArray;
+            
+            // 动态追加新表头
+            const currentColDefs = gridApi.getColumnDefs() || [];
+            // 如果列不存在才添加
+            if (!currentColDefs.some((def: any) => def.field === newColName)) {
+                gridApi.setColumnDefs([...currentColDefs, { field: newColName, sortable: true }]);
+            }
+
+            // 把计算结果灌回当前表格的数据行中
+            let i = 0;
+            gridApi.forEachNode((node: any) => {
+            node.setDataValue(newColName, resultArray[i]);
+            i++;
+            });
+
+            console.log("模型计算并填装完毕！");
+
+        } catch (err) {
+            console.error("公式执行失败", err);
+            throw err; // 抛出错误供 UI 捕获
+        }
+        } else {
+        throw new Error("公式格式错误，请输入形如 =MODEL(col1, col2)");
+        }
+    }
 }));

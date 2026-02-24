@@ -397,6 +397,21 @@ class GeoService {
       }
   }
 
+  // 🌟 新增：公式执行服务调用
+  async executeModelFormula(
+    fileId: string, 
+    modelName: string, 
+    columns: string[], 
+    params: any = {}
+  ) {
+    const response = await apiClient.post('/analysis/execute-formula', {
+      fileId,
+      modelName,
+      columns,
+      params
+    });
+    return response.data;
+  };
 }
 
 // 导出 GeoService 实例，使其他模块可以直接使用

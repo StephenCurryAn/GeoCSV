@@ -1,10 +1,11 @@
 import 'ag-grid-community/styles/ag-grid.css'; 
 import 'ag-grid-community/styles/ag-theme-alpine.css'; 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { AgGridReact } from 'ag-grid-react'; 
 import { type ColDef, ModuleRegistry, AllCommunityModule } from 'ag-grid-community'; 
 import { App, Empty, Button, Space, Popconfirm, Pagination } from 'antd'; // ... 引入 antd 组件
 import { PlusOutlined, DeleteOutlined, TableOutlined, MinusSquareOutlined, DownloadOutlined } from '@ant-design/icons';
+import { useAnalysisStore } from '../../../stores/useAnalysisStore';
 // import { center } from '@turf/turf'; // 引入 center 计算
 import { geoService } from '../../../services/geoService';
 
@@ -129,7 +130,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
             if (key === '_lng') return '经度 (Lng)';
             if (key === '_lat') return '纬度 (Lat)';
             if (key === '_geom_coords') return '几何坐标数据 (Geometry)';
-            return key.toUpperCase();
+            return key;
         })(),
         sortable: true,
         filter: true,
@@ -485,12 +486,118 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
                 }
             }}
 
-            // 监听单元格修改完成事件，使用唯一id而不是行号，从而确保健壮性
-            onCellValueChanged={(event) => {
-                console.log('单元格已修改:', event);
-                const recordId = event.data.id;
+            // 🌟 修改：升级单元格修改事件，拦截公式输入并触发微服务计算
+            onCellValueChanged={async (event) => {
+                const { newValue, oldValue, colDef, node, data } = event;
+                const field = colDef.field;
+
+                // 如果值没变，不触发任何操作
+                if (newValue === oldValue) return;
+
+                // 🌟 新增核心逻辑：检测是否输入了类 Excel 公式 (以 = 开头)
+                if (typeof newValue === 'string' && newValue.startsWith('=')) {
+                    if (!fileId) {
+                        message.error("未找到文件 ID，无法执行公式计算");
+                        node.setDataValue(field!, oldValue); // 恢复原值
+                        return;
+                    }
+
+                    // 正则解析：形如 =ADD_COLS(灾害_1, 灾害_12)
+                    const regex = /^=([a-zA-Z0-9_]+)\((.*)\)$/;
+                    const match = newValue.match(regex);
+
+                    if (match) {
+                        const modelName = match[1];
+                        
+                        // 🌟 终极防呆解析法：彻底兼容空格、中英文逗号、甚至用户误加的单双引号
+                        // 1. 提取用户输入的原始列名（去空格、去引号，可能大小写不对）
+                        const rawColumns = match[2]
+                            .split(/[,，]/)
+                            .map((s: string) => s.trim().replace(/^['"]|['"]$/g, ''))
+                            .filter((s: string) => s.length > 0);
+                        
+                        // 🌟 核心修复：获取表格底层真实的字段名字典
+                        // event.api.getColumnDefs() 能拿到所有列配置，col.field 就是数据库里原汁原味的真实名字
+                        const allRealFields = event.api.getColumnDefs()?.map((col: any) => col.field) || [];
+
+                        // 🌟 智能大小写矫正：不区分大小写地去匹配，然后强制转换为底层的真实名字！
+                        const columns = rawColumns.map(inputCol => {
+                            const realCol = allRealFields.find(field => 
+                                field && field.toLowerCase() === inputCol.toLowerCase()
+                            );
+                            
+                            // 如果连忽略大小写都匹配不上，说明用户真的敲错列名了，直接报错拦截
+                            if (!realCol) {
+                                throw new Error(`表格中找不到列: "${inputCol}"，请检查拼写`);
+                            }
+                            return realCol; // 返回矫正后的真实名字 (比如把 CHILDNUM 矫正回 childNum)
+                        });
+
+                        console.log("🔥 准备发给后端的真实模型名:", modelName);
+                        console.log("🔥 大小写矫正成功！发给后端的精确列名:", columns);
+
+                        // 界面反馈：临时改变当前格子的文字
+                        node.setDataValue(field!, "⏳ 计算中...");
+
+                        try {
+                            const responseData = await geoService.executeModelFormula(fileId, modelName, columns);
+                            
+                            // 🌟 打印后端到底发来了什么，让你一目了然
+                            console.log("🔥 后端返回的数据全貌:", responseData);
+
+                            const { resultColName, resultData, resultArray } = responseData;
+
+                            // 终极防御：如果后端还是发的老版本 resultArray，或者没发 resultData，直接拦截提示
+                            if (!resultData || !Array.isArray(resultData)) {
+                                throw new Error("后端返回的数据结构不正确，缺少 resultData 数组，请检查后端代码！");
+                            }
+
+                            // 转换成字典 Map 加速查询
+                            const scoreMap = new Map();
+                            resultData.forEach((item: any) => {
+                                // 强制转为字符串，防止 ID 类型不匹配（数字 vs 字符串）
+                                scoreMap.set(String(item.id), item.score);
+                            });
+
+                            // 1. 动态为表格追加一列新表头
+                            setColumnDefs(prev => {
+                                if (prev.some(col => col.field === resultColName)) return prev;
+                                return [...prev, { 
+                                    field: resultColName, headerName: resultColName, 
+                                    sortable: true, filter: true, resizable: true, editable: true, minWidth: 100, width: 150 
+                                }];
+                            });
+
+                            // 2. 绝对安全的精准回填
+                            setRowData(prev => prev.map(row => {
+                                const matchScore = scoreMap.get(String(row.id));
+                                return {
+                                    ...row,
+                                    [resultColName]: matchScore !== undefined ? matchScore : row[resultColName]
+                                };
+                            }));
+
+                            node.setDataValue(field!, "✅ 公式完成");
+                            message.success(`模型 ${modelName} 计算成功！`);
+
+                        } catch (error: any) {
+                            console.error("公式计算失败", error);
+                            node.setDataValue(field!, "❌ 公式错误");
+                            message.error(error.response?.data?.error || error.response?.data?.details || "计算失败，请检查模型名称和参数列");
+                        }
+                    } else {
+                        node.setDataValue(field!, "❌ 格式错误");
+                        message.warning("公式格式错误，请输入形如 =MODEL(col1, col2)");
+                    }
+                    
+                    return; // 🌟 公式处理完毕，直接 return，不要触发下方普通的保存逻辑
+                }
+
+                // --- 以下保持你原有的普通数据修改和保存逻辑 ---
+                console.log('普通单元格已修改:', event);
+                const recordId = data.id;
                 if (recordId && onDataChange) {
-                    onDataChange(recordId, event.data);
+                    onDataChange(recordId, data);
                 }
             }}
         />

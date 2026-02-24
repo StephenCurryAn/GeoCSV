@@ -282,7 +282,7 @@ const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ fileId, fields }) => {
                                 <div className="p-1.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                                     <FunctionOutlined />
                                 </div>
-                                <span className="text-sm font-bold text-gray-200">几何模型</span>
+                                <span className="text-sm font-bold text-gray-200">模型函数</span>
                             </div>
                         </div>
                         
