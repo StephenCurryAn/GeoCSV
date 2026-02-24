@@ -723,13 +723,15 @@ export const exportGrid = async (req: Request, res: Response): Promise<void> => 
     }
 }
 
-// 供前端查询可用模型列表（用于生成公式下拉提示）
-export const getAvailableModels = async (req: Request, res: Response) => {
+// 获取所有已注册的活跃模型
+export const getRegisteredModels = async (req: Request, res: Response) => {
   try {
-    const models = await ModelRegistry.find({ status: 'active' });
+    // 只返回 active 状态的模型，并且不要把底层的 pythonCode 传给前端（节省带宽）
+    const models = await ModelRegistry.find({ status: 'active' }).select('-pythonCode');
     res.json({ code: 200, data: models });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error) {
+    console.error("获取模型列表失败:", error);
+    res.status(500).json({ error: '获取模型列表失败' });
   }
 };
 

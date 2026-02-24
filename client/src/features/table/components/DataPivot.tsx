@@ -1,11 +1,11 @@
 import 'ag-grid-community/styles/ag-grid.css'; 
 import 'ag-grid-community/styles/ag-theme-alpine.css'; 
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { AgGridReact } from 'ag-grid-react'; 
 import { type ColDef, ModuleRegistry, AllCommunityModule } from 'ag-grid-community'; 
 import { App, Empty, Button, Space, Popconfirm, Pagination } from 'antd'; // ... 引入 antd 组件
 import { PlusOutlined, DeleteOutlined, TableOutlined, MinusSquareOutlined, DownloadOutlined } from '@ant-design/icons';
-import { useAnalysisStore } from '../../../stores/useAnalysisStore';
+// import { useAnalysisStore } from '../../../stores/useAnalysisStore';
 // import { center } from '@turf/turf'; // 引入 center 计算
 import { geoService } from '../../../services/geoService';
 
@@ -545,7 +545,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
                             // 🌟 打印后端到底发来了什么，让你一目了然
                             console.log("🔥 后端返回的数据全貌:", responseData);
 
-                            const { resultColName, resultData, resultArray } = responseData;
+                            const { resultColName, resultData } = responseData;
 
                             // 终极防御：如果后端还是发的老版本 resultArray，或者没发 resultData，直接拦截提示
                             if (!resultData || !Array.isArray(resultData)) {

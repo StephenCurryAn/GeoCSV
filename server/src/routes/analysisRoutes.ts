@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { pivotAnalysis, generateGrid, exportGrid, getAvailableModels, registerModelByAI, executeTableFormula } from '../controllers/analysisController';
+import { pivotAnalysis, generateGrid, exportGrid, getRegisteredModels, registerModelByAI, executeTableFormula } from '../controllers/analysisController';
 
 const router = Router();
 
@@ -13,7 +13,7 @@ router.post('/grid', generateGrid);
 router.post('/export-grid', exportGrid);
 
 // ✅ [新增] 查询可用模型接口
-router.get('/models', getAvailableModels);
+router.get('/models', getRegisteredModels);
 
 // 🌟 新增：注册 AI 代理写入路由
 router.post('/register-ai', registerModelByAI);

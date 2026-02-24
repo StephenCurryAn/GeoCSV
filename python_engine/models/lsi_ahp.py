@@ -1,4 +1,3 @@
-# python_engine/models/lsi_ahp.py
 import pandas as pd
 
 def execute(df: pd.DataFrame, params: dict) -> list:

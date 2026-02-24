@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Select, Button, Form, ConfigProvider, theme, App, Segmented } from 'antd';
+import React, { useState, useEffect } from 'react';
+import { Select, Button, Form, ConfigProvider, theme, App, Segmented, Tooltip } from 'antd';
 import { 
     PlayCircleOutlined, 
     DotChartOutlined, 
@@ -37,6 +37,24 @@ const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ fileId, fields }) => {
     } = useAnalysisStore();
 
     const [statMode, setStatMode] = useState<StatMode>('Pivot');
+
+    // 🌟 1. 增加模型列表状态
+    const [availableModels, setAvailableModels] = useState<any[]>([]);
+
+    // 🌟 2. 增加拉取模型列表的副作用函数
+    useEffect(() => {
+        const fetchModels = async () => {
+            try {
+                const res = await apiClient.get('/analysis/models');
+                if (res.data.code === 200) {
+                    setAvailableModels(res.data.data);
+                }
+            } catch (error) {
+                console.error('获取可用模型失败:', error);
+            }
+        };
+        fetchModels();
+    }, []); // 空依赖数组，组件挂载时拉取一次即可
 
     // --- 1. 透视分析逻辑 ---
     const handlePivotAnalyze = async () => {
@@ -289,20 +307,61 @@ const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ fileId, fields }) => {
                         {/* Content - 工具箱风格 */}
                         <div className="p-4 bg-gray-900/20">
                             <div className="grid grid-cols-2 gap-3">
-                                <Button type="dashed" className="h-20 border-gray-800 bg-gray-900/50 text-gray-400 hover:text-emerald-400 hover:border-emerald-500/50 hover:bg-emerald-950/20 flex flex-col items-center justify-center gap-2 group transition-all">
-                                    <CalculatorOutlined className="text-xl group-hover:scale-110 transition-transform"/>
-                                    <span className="text-xs">缓冲区分析</span>
-                                </Button>
-                                <Button type="dashed" className="h-20 border-gray-800 bg-gray-900/50 text-gray-400 hover:text-emerald-400 hover:border-emerald-500/50 hover:bg-emerald-950/20 flex flex-col items-center justify-center gap-2 group transition-all">
-                                    <ExperimentOutlined className="text-xl group-hover:scale-110 transition-transform"/>
-                                    <span className="text-xs">叠加分析</span>
-                                </Button>
+                                {availableModels.length > 0 ? (
+                                    availableModels.map((model) => (
+                                        <Tooltip 
+                                            key={model.modelName}
+                                            placement="top" 
+                                            color="#022c22" // 深邃内敛的暗绿色背景，专业不刺眼
+                                            mouseEnterDelay={0.3} 
+                                            title={
+                                                <div className="flex flex-col gap-1.5 p-1 max-w-50">
+                                                    <div className="font-bold text-emerald-400 border-b border-emerald-800/50 pb-1">
+                                                        {model.displayName || model.modelName}
+                                                    </div>
+                                                    <div className="text-xs text-gray-300 leading-relaxed">
+                                                        {model.description}
+                                                    </div>
+                                                    <div className="mt-1 px-2 py-1 bg-black/50 rounded border border-emerald-800/80 font-mono text-[10px] text-emerald-400 break-all shadow-[0_0_8px_rgba(52,211,153,0.1)_inset]">
+                                                        输入： ={model.modelName}(...)
+                                                    </div>
+                                                </div>
+                                            }
+                                        >
+                                            <div 
+                                                className="relative cursor-pointer h-12 flex items-center justify-center bg-[#0b1121] border border-emerald-900/50 rounded-md overflow-hidden group hover:border-emerald-500/50 hover:bg-emerald-950/40 transition-all duration-300 hover:shadow-[0_0_12px_rgba(16,185,129,0.15)] hover:-translate-y-0.5"
+                                            >
+                                                {/* 左侧动态发光条 (默认极暗，悬浮瞬间亮起纯正祖母绿) */}
+                                                <div className="absolute left-0 top-0 bottom-0 w-1 bg-emerald-950 group-hover:bg-emerald-400 transition-colors duration-300"></div>
+                                                
+                                                {/* 🌟 模型核心指令名称: text-sm(与标题同大), font-bold, tracking-wide(微调字间距显得精致) */}
+                                                <span className="text-sm font-bold tracking-wide text-emerald-400 group-hover:text-emerald-300 transition-colors duration-300 drop-shadow-sm">
+                                                    {model.modelName}
+                                                </span>
+                                                
+                                                {/* 右上角赛博朋克装饰角标 */}
+                                                <div className="absolute top-0 right-0 w-2 h-2 border-l border-b border-emerald-900/50 group-hover:border-emerald-400/60 transition-colors duration-300"></div>
+                                                {/* 右下角装饰点 */}
+                                                <div className="absolute bottom-1 right-1 w-0.5 h-0.5 bg-emerald-900/60 group-hover:bg-emerald-400/80 transition-colors duration-300 rounded-full"></div>
+                                            </div>
+                                        </Tooltip>
+                                    ))
+                                ) : (
+                                    // 加载中或无模型时的占位
+                                    <div className="col-span-2 text-center py-6 text-gray-500 text-xs">
+                                        <ThunderboltOutlined className="animate-pulse text-lg mb-2 block text-emerald-700"/>
+                                        正在同步云端模型库...
+                                    </div>
+                                )}
                             </div>
-                            <div className="mt-3 text-center">
-                                <span className="text-[10px] text-gray-600 bg-gray-900 px-2 py-1 rounded border border-gray-800">
-                                    更多模型函数开发中...
+                            
+                            {/* 底部提示
+                            <div className="mt-4 text-center">
+                                <span className="text-[12px] text-emerald-400 bg-emerald-950/20 px-3 py-1.5 rounded-full border border-emerald-900/30">
+                                    在表格单元格输入   <b className="text-emerald-400">=模型名称(列名)</b>   即可调用
                                 </span>
-                            </div>
+                            </div> */}
+
                         </div>
                     </div>
                 </div>
