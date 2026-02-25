@@ -316,13 +316,13 @@ const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ fileId, fields }) => {
                                             mouseEnterDelay={0.3} 
                                             title={
                                                 <div className="flex flex-col gap-1.5 p-1 max-w-50">
-                                                    <div className="font-bold text-emerald-400 border-b border-emerald-800/50 pb-1">
+                                                    <div className="text-base font-bold text-emerald-400 border-b border-emerald-800/50 pb-1">
                                                         {model.displayName || model.modelName}
                                                     </div>
-                                                    <div className="text-xs text-gray-300 leading-relaxed">
+                                                    <div className="text-sm text-gray-300 leading-relaxed">
                                                         {model.description}
                                                     </div>
-                                                    <div className="mt-1 px-2 py-1 bg-black/50 rounded border border-emerald-800/80 font-mono text-[10px] text-emerald-400 break-all shadow-[0_0_8px_rgba(52,211,153,0.1)_inset]">
+                                                    <div className="mt-1 px-2 py-1 bg-black/50 rounded border border-emerald-800/80 font-mono text-sm text-emerald-400 break-all shadow-[0_0_8px_rgba(52,211,153,0.1)_inset]">
                                                         输入： ={model.modelName}(...)
                                                     </div>
                                                 </div>

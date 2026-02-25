@@ -115,46 +115,63 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
      * 通用列定义生成函数 (修复 Warning #48)
      */
     const generateColumnDefs = (rows: any[]) => {
-    if (rows.length === 0) return [];
-    // 定义不可编辑的字段 (例如 ID 和 坐标)
-    const readOnlyFields = ['id', '_geometry', 'cp', '_cp', '_lng', '_lat', '_geom_coords'];
-    const keys = Object.keys(rows[0]);
-    return keys
-        .filter(k => !['_cp'].includes(k))
-        .map(key => ({
-        field: key,
-        // 自定义表头名称 (让显示更友好)
-        headerName: (() => {
-            if (key === '_geometry') return '图层类型';
-            if (key === 'center') return '中心坐标';
-            if (key === '_lng') return '经度 (Lng)';
-            if (key === '_lat') return '纬度 (Lat)';
-            if (key === '_geom_coords') return '几何坐标数据 (Geometry)';
-            return key;
-        })(),
-        sortable: true,
-        filter: true,
-        resizable: true,
-        // ✅移除 flex: 1，防止强行压缩列宽
-        // flex: 1,
-        // ✅设置合理的最小宽度和默认宽度
-        minWidth: 100, // 最小 100px，防止缩得太小
-        width: 150,    // 默认给一个舒适的宽度 (比如 150px)
+        if (rows.length === 0) return [];
+        // 定义不可编辑的字段 (例如 ID 和 坐标)
+        const readOnlyFields = ['id', '_geometry', 'cp', '_cp', '_lng', '_lat', '_geom_coords'];
+        const keys = Object.keys(rows[0]);
 
-        // 只有不在 readOnlyFields 里的字段可以编辑
-        editable: !readOnlyFields.includes(key),
-        // 编辑器配置 (默认是文本框，也可以配下拉框等)
-        cellEditor: 'agTextCellEditor',
+        // 1. 生成基于数据的真实列
+        const baseCols = keys
+            .filter(k => !['_cp'].includes(k))
+            .map(key => {
+                // ✅ 判断当前列是否为那个包含超级长字符串的“几何坐标列”
+                const isGeomCoordsCol = (key === '_geom_coords');
 
-        // 如果值是对象或数组（比如 "cp": [120, 30]），转成字符串显示，解决 Warning #48
-        valueFormatter: (params: any) => {
-            const val = params.value;
-            if (typeof val === 'object' && val !== null) {
-            return JSON.stringify(val); 
-            }
-            return val;
-        }
+                return {
+                    field: key,
+                    headerName: (() => {
+                        if (key === '_geometry') return '图层类型';
+                        if (key === 'center') return '中心坐标';
+                        if (key === '_lng') return '经度 (Lng)';
+                        if (key === '_lat') return '纬度 (Lat)';
+                        if (isGeomCoordsCol) return '几何坐标数据 (Geometry)';
+                        return key;
+                    })(),
+                    sortable: true,
+                    filter: true,
+                    resizable: true,
+                    minWidth: 100,
+
+                    // ✅ 新增：如果是几何坐标列，初始宽度设为 200，且最高不超过 300
+                    width: isGeomCoordsCol ? 200 : 150,
+                    maxWidth: isGeomCoordsCol ? 300 : undefined,
+                    // ✅ 新增核心防御：禁止该列参与表格外层的 autoSizeStrategy="fitCellContents"
+                    suppressAutoSize: isGeomCoordsCol, 
+
+                    editable: !readOnlyFields.includes(key),
+                    cellEditor: 'agTextCellEditor',
+                    valueFormatter: (params: any) => {
+                        const val = params.value;
+                        if (typeof val === 'object' && val !== null) {
+                            return JSON.stringify(val); 
+                        }
+                        return val;
+                    }
+                };
+            });
+
+        // 2. 动态生成 5 列预留空列，专门用于随意输入公式
+        const emptyCols = Array.from({ length: 5 }).map((_, i) => ({
+            field: `__empty_col_${i}`,
+            headerName: ` `,
+            editable: true,
+            minWidth: 100,
+            width: 150,
+            cellEditor: 'agTextCellEditor'
         }));
+
+        // 返回合并后的表头
+        return [...baseCols, ...emptyCols];
     };
 
     // ✅把 processGeoJSON 改造一下，只处理 features 数组
@@ -184,6 +201,8 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
         // 将 properties 扁平化，并添加辅助字段
         const row = {
           ...feature.properties, // 扁平化属性
+          // 🌟 修复1：强制注入唯一标识符 ID，确保能完美承接后端的回填数据
+          id: feature.properties?.id || feature._id || feature.id,
           cp: cp, 
           _geometry: feature.geometry?.type || 'Unknown'
           // ...
@@ -442,7 +461,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
             
             rowData={rowData}
             columnDefs={columnDefs}
-
+            
             // ✅关闭 AG Grid 的全量分页，因为只给了它一页数据
             pagination={false}
             // paginationPageSize={20}
@@ -541,44 +560,60 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
 
                         try {
                             const responseData = await geoService.executeModelFormula(fileId, modelName, columns);
-                            
-                            // 🌟 打印后端到底发来了什么，让你一目了然
-                            console.log("🔥 后端返回的数据全貌:", responseData);
-
                             const { resultColName, resultData } = responseData;
 
-                            // 终极防御：如果后端还是发的老版本 resultArray，或者没发 resultData，直接拦截提示
                             if (!resultData || !Array.isArray(resultData)) {
-                                throw new Error("后端返回的数据结构不正确，缺少 resultData 数组，请检查后端代码！");
+                                throw new Error("后端返回的数据结构不正确，缺少 resultData 数组！");
                             }
 
                             // 转换成字典 Map 加速查询
                             const scoreMap = new Map();
                             resultData.forEach((item: any) => {
-                                // 强制转为字符串，防止 ID 类型不匹配（数字 vs 字符串）
                                 scoreMap.set(String(item.id), item.score);
                             });
 
-                            // 1. 动态为表格追加一列新表头
+                            // 🌟 修复2 (A)：动态追加一列表头 (直接使用 React 状态即可，表头更新不会卡顿)
                             setColumnDefs(prev => {
+                                // 如果已经有这列了，就不重复添加
                                 if (prev.some(col => col.field === resultColName)) return prev;
-                                return [...prev, { 
-                                    field: resultColName, headerName: resultColName, 
-                                    sortable: true, filter: true, resizable: true, editable: true, minWidth: 100, width: 150 
-                                }];
+                                
+                                const newCols = [
+                                    ...prev,
+                                    { 
+                                        field: resultColName, 
+                                        headerName: resultColName, 
+                                        sortable: true, filter: true, resizable: true, editable: true, minWidth: 100, width: 150 
+                                    }
+                                ];
+                    
+                                return newCols;
                             });
 
-                            // 2. 绝对安全的精准回填
+                            // 🌟 修复2 (B)：采用 applyTransaction 事务更新，极速重绘改变的单元格！
+                            const updatedRows: any[] = [];
+                            event.api.forEachNode((rowNode) => {
+                                const data = rowNode.data;
+                                // 跳过底部用来输入公式的固定空行
+                                if (data && !String(data.id).startsWith('__pinned')) {
+                                    const matchScore = scoreMap.get(String(data.id));
+                                    if (matchScore !== undefined) {
+                                        data[resultColName] = matchScore; // 修改内存中的该行数据
+                                        updatedRows.push(data);
+                                    }
+                                }
+                            });
+
+                            // 🔥 向底层引擎发射更新指令，界面数据瞬间变动！
+                            event.api.applyTransaction({ update: updatedRows });
+
+                            // 兜底同步本地的 React state
                             setRowData(prev => prev.map(row => {
                                 const matchScore = scoreMap.get(String(row.id));
-                                return {
-                                    ...row,
-                                    [resultColName]: matchScore !== undefined ? matchScore : row[resultColName]
-                                };
+                                return matchScore !== undefined ? { ...row, [resultColName]: matchScore } : row;
                             }));
 
                             node.setDataValue(field!, "✅ 公式完成");
-                            message.success(`模型 ${modelName} 计算成功！`);
+                            message.success(`模型计算成功！新增列 [${resultColName}] 已渲染`);
 
                         } catch (error: any) {
                             console.error("公式计算失败", error);
