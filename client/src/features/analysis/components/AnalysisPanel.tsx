@@ -4,7 +4,6 @@ import {
     PlayCircleOutlined, 
     DotChartOutlined, 
     BarChartOutlined, 
-    CalculatorOutlined,
     FunctionOutlined,
     ExperimentOutlined,
     AreaChartOutlined,

@@ -462,6 +462,11 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
             rowData={rowData}
             columnDefs={columnDefs}
             
+            // 🌟 灵魂属性新增：告诉 AG Grid 如何唯一识别每一行！
+            getRowId={(params) => {
+                return String(params.data.id);
+            }}
+
             // ✅关闭 AG Grid 的全量分页，因为只给了它一页数据
             pagination={false}
             // paginationPageSize={20}
@@ -572,12 +577,10 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
                                 scoreMap.set(String(item.id), item.score);
                             });
 
-                            // 🌟 修复2 (A)：动态追加一列表头 (直接使用 React 状态即可，表头更新不会卡顿)
+                            // 🌟 第一步：更新表头配置 (React 状态)
                             setColumnDefs(prev => {
-                                // 如果已经有这列了，就不重复添加
                                 if (prev.some(col => col.field === resultColName)) return prev;
-                                
-                                const newCols = [
+                                return [
                                     ...prev,
                                     { 
                                         field: resultColName, 
@@ -585,32 +588,21 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
                                         sortable: true, filter: true, resizable: true, editable: true, minWidth: 100, width: 150 
                                     }
                                 ];
-                    
-                                return newCols;
                             });
 
-                            // 🌟 修复2 (B)：采用 applyTransaction 事务更新，极速重绘改变的单元格！
-                            const updatedRows: any[] = [];
-                            event.api.forEachNode((rowNode) => {
-                                const data = rowNode.data;
-                                // 跳过底部用来输入公式的固定空行
-                                if (data && !String(data.id).startsWith('__pinned')) {
-                                    const matchScore = scoreMap.get(String(data.id));
+                            // 🌟 第二步：纯 React 状态重绘行数据 (放弃 applyTransaction)
+                            // 在 React 18 中，这行代码会和上面的 setColumnDefs 被“自动批处理(Batched)”为同一次渲染
+                            // 表头和数据会同时完美地呈现在界面上！
+                            setRowData(prev => {
+                                return prev.map(row => {
+                                    const matchScore = scoreMap.get(String(row.id));
+                                    // 如果这行在后端返回的结果里有算好的分数，就把新列和分数塞进这个对象
                                     if (matchScore !== undefined) {
-                                        data[resultColName] = matchScore; // 修改内存中的该行数据
-                                        updatedRows.push(data);
+                                        return { ...row, [resultColName]: matchScore };
                                     }
-                                }
+                                    return row;
+                                });
                             });
-
-                            // 🔥 向底层引擎发射更新指令，界面数据瞬间变动！
-                            event.api.applyTransaction({ update: updatedRows });
-
-                            // 兜底同步本地的 React state
-                            setRowData(prev => prev.map(row => {
-                                const matchScore = scoreMap.get(String(row.id));
-                                return matchScore !== undefined ? { ...row, [resultColName]: matchScore } : row;
-                            }));
 
                             node.setDataValue(field!, "✅ 公式完成");
                             message.success(`模型计算成功！新增列 [${resultColName}] 已渲染`);
