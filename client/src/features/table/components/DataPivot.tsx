@@ -5,8 +5,6 @@ import { AgGridReact } from 'ag-grid-react';
 import { type ColDef, ModuleRegistry, AllCommunityModule } from 'ag-grid-community'; 
 import { App, Empty, Button, Space, Popconfirm, Pagination } from 'antd'; // ... 引入 antd 组件
 import { PlusOutlined, DeleteOutlined, TableOutlined, MinusSquareOutlined, DownloadOutlined } from '@ant-design/icons';
-// import { useAnalysisStore } from '../../../stores/useAnalysisStore';
-// import { center } from '@turf/turf'; // 引入 center 计算
 import { geoService } from '../../../services/geoService';
 
 // 注册模块
