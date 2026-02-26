@@ -2,6 +2,7 @@ import os
 import importlib
 import pkgutil
 import time
+import traceback  # 🌟 1. 必须引入这个，用来打印详细的死因！
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Any
@@ -53,30 +54,52 @@ async def execute_model(payload: ModelInput):
     try:
         model_key = payload.model_name.upper()
 
-        # 【智能热插拔逻辑】：如果字典里找不到这个模型，可能是 AI 刚刚写入了新文件！
-        # 此时主动触发一次重新扫描 (Auto-Discovery on demand)
         if model_key not in MODEL_REGISTRY:
             print(f"[!] 未找到模型 {model_key}，尝试重新扫描 models 目录...")
-            importlib.invalidate_caches() # 清除 import 缓存
-            auto_discover_models()        # 重新加载
+            importlib.invalidate_caches()
+            auto_discover_models()        
             
-            # 如果重新扫描后还是没有，说明确实不存在
             if model_key not in MODEL_REGISTRY:
-                raise HTTPException(status_code=404, detail=f"模型 {payload.model_name} 未在系统中找到对应的执行脚本")
+                raise HTTPException(status_code=404, detail=f"模型 {payload.model_name} 未找到")
 
         # 转换为 DataFrame 提速
         df = pd.DataFrame(payload.data)
         
         # 提取函数指针并执行
         target_func = MODEL_REGISTRY[model_key]
-        result_array = target_func(df, payload.parameters)
+        raw_result = target_func(df, payload.parameters)
+
+        # ==========================================
+        # 🌟 终极防御：强制类型清洗，防止序列化崩溃
+        # ==========================================
+        # 1. 如果 AI 返回的是 Pandas Series 或 Numpy Array，强制转为 list
+        if hasattr(raw_result, 'tolist'):
+            raw_result = raw_result.tolist()
+            
+        # 2. 深度清洗：确保列表里的每一个元素都是原生 float/int，处理 NaN 空值
+        # 因为 JSON 不认识 np.float64 和 NaN！
+        clean_result = []
+        for x in raw_result:
+            if pd.isna(x):
+                clean_result.append(0.0)
+            else:
+                clean_result.append(float(x))
 
         return {
             "status": "success",
-            "result_array": result_array,
+            "result_array": clean_result, # 🌟 返回清洗后的绝对安全数组
             "execution_time_ms": (time.time() - start_time) * 1000
         }
+        
     except Exception as e:
+        # ==========================================
+        # 🌟 显微镜：将大模型代码的报错明明白白打印出来
+        # ==========================================
+        print(f"\n{'='*50}")
+        print(f"❌ 算子执行崩溃: {payload.model_name}")
+        traceback.print_exc()  # 把 Python 底层报错堆栈打印到终端
+        print(f"{'='*50}\n")
+        
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import GeoAIAgent from '../features/agent/components/GeoAIAgent'; // 🌟 引入新组件
 
 const MIN_SIDEBAR_WIDTH = 150; // 侧边栏最小展开宽度
 const MIN_TABLE_WIDTH = 200;   // 中间表格最小展开宽度
@@ -167,6 +168,9 @@ const MainLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
           {childrenArray[2]}
         </div>
       </div>
+
+      {/* 🌟 放置悬浮 GeoAI 智能体 */}
+      <GeoAIAgent />
 
     </div>
   );

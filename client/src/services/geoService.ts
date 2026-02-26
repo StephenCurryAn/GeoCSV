@@ -416,7 +416,7 @@ class GeoService {
   // ==========================================
   // 🤖 GeoAI 智能体接口
   // ==========================================
-  async generateModelByAI(data: { modelName: string; displayName: string; userDescription: string }) {
+  async  generateModelByAI(data: { userDescription: string }){
     const response = await apiClient.post('/analysis/agent/generate-model', data);
     return response.data;
   };

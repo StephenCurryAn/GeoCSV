@@ -848,26 +848,28 @@ export const executeTableFormula = async (req: Request, res: Response) => {
 };
 
 // ==========================================
-// 🌟 核心突破：自然语言驱动的模型智能生成 (Text-to-Model)
+// 🌟 核心突破：Agentic Workflow 模型智能生成与元数据提取
 // ==========================================
 export const createModelViaNaturalLanguage = async (req: Request, res: Response) => {
     try {
-        // userDescription 是用户在前端输入的自然语言需求
-        // 比如："帮我写一个灾害敏感性指数计算模型，把前端传进来的所有列做等权重求和，并归一化到0-100之间"
-        const { modelName, displayName, description, parameters, userDescription } = req.body;
+        const { userDescription } = req.body;
 
-        if (!userDescription || !modelName) {
-            return res.status(400).json({ error: "模型名称和需求描述不能为空" });
+        if (!userDescription) {
+            return res.status(400).json({ error: "需求描述不能为空" });
         }
 
-        console.log(`[GeoAI Agent] 正在思考并生成模型代码: ${modelName}...`);
+        console.log(`[GeoAI Agent] 收到用户指令: ${userDescription}`);
+        console.log(`[GeoAI Agent] 正在思考并提取模型特征...`);
 
-        // 1. 唤醒大模型，生成 Python 纯代码
-        const pythonCode = await generateModelCodeFromAI(userDescription);
+        // 1. 唤醒大模型，返回结构化的 JSON 数据（包含名字、描述、参数、代码）
+        const aiResult = await generateModelCodeFromAI(userDescription);
         
-        console.log(`[GeoAI Agent] 代码生成完毕，准备注入系统框架。`);
+        // 🌟 关键修改：在这里解构出 parameters
+        const { modelName, displayName, description, parameters, pythonCode } = aiResult;
 
-        // 2. 物理隔离写入（复用你之前的逻辑，注入到 python_engine/models）
+        console.log(`[GeoAI Agent] 思考完成！模型名: ${modelName}，提取到 ${parameters?.length || 0} 个参数。准备注入系统。`);
+
+        // 2. 物理隔离写入 (存入 python_engine/models)
         const modelsDir = path.join(process.cwd(), '../python_engine/models');
         if (!fs.existsSync(modelsDir)) {
             fs.mkdirSync(modelsDir, { recursive: true });
@@ -882,9 +884,9 @@ export const createModelViaNaturalLanguage = async (req: Request, res: Response)
             { modelName: modelName.toUpperCase() },
             { 
                 modelName: modelName.toUpperCase(), 
-                displayName: displayName || modelName, 
-                description: description || userDescription, 
-                parameters: parameters || {}, 
+                displayName: displayName, 
+                description: description, 
+                parameters: parameters || [], // 🌟 核心：把大模型解析出的参数定义直接存入数据库！
                 status: 'active' 
             },
             { upsert: true, new: true }
@@ -892,13 +894,13 @@ export const createModelViaNaturalLanguage = async (req: Request, res: Response)
 
         res.json({ 
             code: 200, 
-            message: `🎉 成功！大模型已为您生成并挂载了 ${modelName} 算法。`, 
+            message: `🎉 成功！GeoAI 为您构建了 ${displayName} (${modelName})。`, 
             data: newModel,
-            previewCode: pythonCode // 把代码返回给前端，方便用户预览
+            previewCode: pythonCode 
         });
 
     } catch (error: any) {
-        console.error("大模型生成失败:", error);
+        console.error("大模型 Agent 执行失败:", error);
         res.status(500).json({ error: error.message || '系统内部异常' });
     }
 };

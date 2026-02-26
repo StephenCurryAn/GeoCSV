@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Select, Button, Form, ConfigProvider, theme, App, Segmented, Tooltip, Modal, Input, Typography, Spin } from 'antd';
+import { Select, Button, Form, ConfigProvider, theme, App, Segmented, Tooltip } from 'antd';
 import { 
     PlayCircleOutlined, 
     DotChartOutlined, 
@@ -10,19 +10,11 @@ import {
     DeploymentUnitOutlined, // ✅ [新增] 用这个图标代表山脊图/分段
     ThunderboltOutlined,
     BoxPlotOutlined, // ✅ [新增] 引入图标
-    // ✅ [新增] AI 控制台所需图标
-    RobotOutlined, 
-    CodeOutlined, 
-    ShakeOutlined, 
-    CheckCircleOutlined
 } from '@ant-design/icons';
 import { useAnalysisStore } from '../../../stores/useAnalysisStore';
 import apiClient from '../../../services/apiClient';
-import { geoService } from '../../../services/geoService';
 
 const { Option } = Select;
-const { TextArea } = Input;
-const { Text } = Typography;
 
 interface AnalysisPanelProps {
     fileId: string;
@@ -48,7 +40,6 @@ const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ fileId, fields }) => {
     // 🌟 1. 增加模型列表状态
     const [availableModels, setAvailableModels] = useState<any[]>([]);
 
-    // 🌟 2. 增加拉取模型列表的副作用函数
     useEffect(() => {
         const fetchModels = async () => {
             try {
@@ -61,13 +52,17 @@ const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ fileId, fields }) => {
             }
         };
         fetchModels();
-    }, []); // 空依赖数组，组件挂载时拉取一次即可
 
-    // === AI 建模控制台专属 State ===
-    const [isAIModalVisible, setIsAIModalVisible] = useState(false);
-    const [isAIGenerating, setIsAIGenerating] = useState(false);
-    const [generatedCode, setGeneratedCode] = useState<string | null>(null);
-    const [form] = Form.useForm();
+        // 🌟 新增：监听左下角 GeoAIAgent 派发的模型生成成功事件
+        const handleModelAdded = (e: any) => {
+            if (e.detail) {
+                setAvailableModels(prev => [...prev, e.detail]);
+            }
+        };
+        window.addEventListener('geoai-model-added', handleModelAdded);
+        
+        return () => window.removeEventListener('geoai-model-added', handleModelAdded);
+    }, []);
 
     // --- 1. 透视分析逻辑 ---
     const handlePivotAnalyze = async () => {
@@ -135,29 +130,6 @@ const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ fileId, fields }) => {
             message.error('获取数据失败');
         } finally {
             setLoading(false);
-        }
-    };
-
-    // 触发 AI 生成
-    const handleAIGenerate = async () => {
-        try {
-        const values = await form.validateFields();
-        setIsAIGenerating(true);
-        setGeneratedCode(null); // 清空上次的代码
-
-        // 呼叫后端大模型
-        const response = await geoService.generateModelByAI(values);
-        
-        message.success(response.message || '模型生成成功！');
-        setGeneratedCode(response.previewCode); // 渲染炫酷的 Python 代码
-        
-        // 注意：这里不要立刻关闭弹窗，让用户欣赏一下 AI 写的代码！
-
-        } catch (error: any) {
-        if (error.errorFields) return; // 表单校验失败不提示
-        message.error(error.response?.data?.error || 'AI 生成失败，请重试');
-        } finally {
-        setIsAIGenerating(false);
         }
     };
 
@@ -401,159 +373,6 @@ const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ fileId, fields }) => {
                         </div>
                     </div>
                 </div>
-
-                {/* =========== 区域 3: GeoAI 智能体 (GeoAI AGENT) - ✅ 全新炫酷区域 =========== */}
-                <div className="flex flex-col gap-3 pb-8">
-                    <div className="flex items-center gap-2 px-1">
-                        <RobotOutlined className="text-blue-500" />
-                        <span className="text-xs font-bold text-blue-500/80 tracking-widest uppercase font-mono">GeoAI Agent</span>
-                        <div className="h-px flex-1 bg-linear-to-r from-blue-900/50 to-transparent"></div>
-                    </div>
-
-                    <div className="rounded-xl overflow-hidden border border-blue-800/30 bg-[#0b1121] shadow-lg shadow-blue-900/10 hover:border-blue-500/40 transition-all duration-300 relative group">
-                        {/* 左侧幽蓝色霓虹呼吸灯 */}
-                        <div className="absolute top-0 left-0 w-1 h-full bg-blue-500 shadow-[0_0_12px_#3b82f6] group-hover:shadow-[0_0_20px_#60a5fa] transition-all duration-500"></div>
-                        
-                        <div className="p-5 bg-linear-to-br from-blue-950/20 via-transparent to-purple-900/10">
-                            <h3 className="text-sm font-bold text-gray-200 mb-2 flex items-center">
-                                <ShakeOutlined className="mr-2 text-blue-400 animate-pulse" /> 智能模型铸造厂
-                            </h3>
-                            <p className="text-xs text-gray-400 mb-5 leading-relaxed">
-                                无需编写代码。用自然语言描述分析逻辑，大语言模型将实时生成、编译并自动挂载专属的 Python 地理分析算子。
-                            </p>
-                            <Button 
-                                type="primary" 
-                                icon={<ShakeOutlined />} 
-                                className="w-full h-10 font-bold tracking-wide bg-linear-to-r from-blue-700 to-indigo-700 hover:from-blue-600 hover:to-indigo-600 border-none shadow-[0_0_15px_rgba(59,130,246,0.3)] hover:shadow-[0_0_20px_rgba(59,130,246,0.5)] transition-all duration-300"
-                                onClick={() => setIsAIModalVisible(true)}
-                            >
-                                唤醒 GeoAI 智能体
-                            </Button>
-                        </div>
-                    </div>
-                </div>
-
-                {/* 🌟 核心：AI 对话与代码预览 Modal (依然被 ConfigProvider 的暗色主题包裹) */}
-                <Modal
-                    title={
-                        <div className="flex items-center text-blue-400 font-mono tracking-wide">
-                            <RobotOutlined className="mr-2 text-xl" /> 
-                            <span>AGENT FORGE TERMINAL</span>
-                        </div>
-                    }
-                    open={isAIModalVisible}
-                    onCancel={() => setIsAIModalVisible(false)}
-                    footer={null} 
-                    width={680}
-                    styles={{
-                        body: { backgroundColor: '#0f172a', padding: '24px', color: '#e5e7eb' },
-                        header: { backgroundColor: '#0f172a', borderBottom: '1px solid #1e293b', padding: '16px 24px' }
-                    }}
-                    closeIcon={<span className="text-gray-500 hover:text-blue-400 transition-colors">✖</span>}
-                >
-                    <Form form={form} layout="vertical" className="mt-2">
-                        <div className="grid grid-cols-2 gap-4">
-                            <Form.Item 
-                                name="modelName" 
-                                label={<span className="text-gray-400 font-mono text-xs">MODEL_NAME (大写英文)</span>}
-                                rules={[{ required: true, message: '必须输入英文模型名' }]}
-                            >
-                                <Input placeholder="例如: WATER_RISK" className="bg-slate-800/50 border-slate-700 text-blue-300 font-mono hover:border-blue-500 focus:border-blue-500 focus:shadow-[0_0_8px_rgba(59,130,246,0.3)]" />
-                            </Form.Item>
-                            
-                            <Form.Item 
-                                name="displayName" 
-                                label={<span className="text-gray-400 font-mono text-xs">DISPLAY_NAME (中文名称)</span>}
-                                rules={[{ required: true }]}
-                            >
-                                <Input placeholder="例如: 洪涝灾害风险指数" className="bg-slate-800/50 border-slate-700 text-gray-200 hover:border-blue-500 focus:border-blue-500 focus:shadow-[0_0_8px_rgba(59,130,246,0.3)]" />
-                            </Form.Item>
-                        </div>
-
-                        <Form.Item 
-                            name="userDescription" 
-                            label={<span className="text-gray-400 font-mono text-xs flex items-center"><CodeOutlined className="mr-1"/> PROMPT_DESCRIPTION (算法逻辑描述)</span>}
-                            rules={[{ required: true, message: '请描述您的算法需求' }]}
-                        >
-                            <TextArea 
-                                rows={4} 
-                                placeholder="请描述底层计算逻辑。例如：&#10;将第一列与第二列相加，然后乘以0.8，若结果大于100则截断为100。" 
-                                className="bg-slate-800/50 border-slate-700 text-gray-200 hover:border-blue-500 focus:border-blue-500 focus:shadow-[0_0_8px_rgba(59,130,246,0.3)] leading-relaxed"
-                            />
-                        </Form.Item>
-
-                        {!generatedCode && (
-                            <Form.Item className="mb-0 mt-6 text-right">
-                                <Button 
-                                    type="primary" 
-                                    onClick={handleAIGenerate} 
-                                    loading={isAIGenerating}
-                                    className={`h-10 px-8 font-bold tracking-wide bg-linear-to-r from-blue-600 to-indigo-600 border-none ${isAIGenerating ? 'opacity-80' : 'hover:shadow-[0_0_20px_rgba(79,70,229,0.5)]'}`}
-                                >
-                                    {isAIGenerating ? 'NEURAL NETWORK COMPUTING...' : 'INITIATE GENERATION'}
-                                </Button>
-                            </Form.Item>
-                        )}
-                    </Form>
-
-                    {/* 加载中的极客动画 */}
-                    {isAIGenerating && (
-                       <div className="mt-8 flex flex-col items-center justify-center p-10 border border-dashed border-slate-700 rounded-lg bg-slate-900/50">
-                          <Spin size="large" />
-                          <p className="mt-5 text-blue-400 font-mono text-xs tracking-widest animate-pulse">COMPILING PYTHON KERNEL...</p>
-                       </div>
-                    )}
-
-                    {/* 代码生成完毕后的终端展示区 */}
-                    {generatedCode && !isAIGenerating && (
-                        <div className="mt-6 animate-fade-in-up">
-                            <div className="flex items-center justify-between mb-3">
-                                <span className="text-emerald-400 text-sm font-mono flex items-center">
-                                    <CheckCircleOutlined className="mr-2" /> BUILD SUCCESSFUL
-                                </span>
-                                <span className="text-slate-500 text-xs font-mono bg-slate-800 px-2 py-1 rounded">./models/{form.getFieldValue('modelName').toLowerCase()}.py</span>
-                            </div>
-                            
-                            {/* MacOS 风格终端 */}
-                            <div className="rounded-lg overflow-hidden bg-[#0d1117] border border-slate-700 shadow-2xl">
-                                <div className="flex px-4 py-2 bg-[#161b22] border-b border-slate-700 items-center">
-                                    <div className="flex gap-2">
-                                        <div className="w-3 h-3 rounded-full bg-red-500/80"></div>
-                                        <div className="w-3 h-3 rounded-full bg-yellow-500/80"></div>
-                                        <div className="w-3 h-3 rounded-full bg-green-500/80"></div>
-                                    </div>
-                                    <span className="ml-auto text-slate-500 text-xs font-mono flex items-center gap-1">
-                                        <CodeOutlined /> Generated by DeepSeek-Coder
-                                    </span>
-                                </div>
-                                <div className="p-5 overflow-x-auto max-h-64 overflow-y-auto custom-scrollbar">
-                                    <pre className="text-[13px] font-mono leading-relaxed text-emerald-400 m-0">
-                                        <code>{generatedCode}</code>
-                                    </pre>
-                                </div>
-                            </div>
-
-                            <div className="mt-5 text-center p-3 bg-blue-900/20 rounded border border-blue-900/50">
-                                <Text className="text-slate-300 text-xs">
-                                    模型已热挂载。在左侧表格单元格中输入 <b className="text-blue-400 font-mono text-sm tracking-wider px-1">={form.getFieldValue('modelName')}(列名)</b> 立即执行计算！
-                                </Text>
-                            </div>
-                            
-                            <div className="mt-5 flex justify-end">
-                                <Button 
-                                    onClick={() => {
-                                        setIsAIModalVisible(false);
-                                        setGeneratedCode(null);
-                                        form.resetFields();
-                                    }}
-                                    className="bg-slate-700 text-white border-none hover:bg-slate-600 font-mono text-xs tracking-widest px-6"
-                                >
-                                    CLOSE & EXECUTE
-                                </Button>
-                            </div>
-                        </div>
-                    )}
-                </Modal>
 
             </ConfigProvider>
 
