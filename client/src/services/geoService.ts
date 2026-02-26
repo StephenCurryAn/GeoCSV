@@ -412,6 +412,15 @@ class GeoService {
     });
     return response.data;
   };
+
+  // ==========================================
+  // 🤖 GeoAI 智能体接口
+  // ==========================================
+  async generateModelByAI(data: { modelName: string; displayName: string; userDescription: string }) {
+    const response = await apiClient.post('/analysis/agent/generate-model', data);
+    return response.data;
+  };
+
 }
 
 // 导出 GeoService 实例，使其他模块可以直接使用

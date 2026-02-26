@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { pivotAnalysis, generateGrid, exportGrid, getRegisteredModels, registerModelByAI, executeTableFormula } from '../controllers/analysisController';
+import { pivotAnalysis, generateGrid, exportGrid, getRegisteredModels, registerModelByAI, executeTableFormula, createModelViaNaturalLanguage } from '../controllers/analysisController';
 
 const router = Router();
 
@@ -20,5 +20,8 @@ router.post('/register-ai', registerModelByAI);
 
 // 🌟 新增：注册前端公式执行路由
 router.post('/execute-formula', executeTableFormula);
+
+// 🌟 新增：通过自然语言创建模型路由
+router.post('/agent/generate-model', createModelViaNaturalLanguage);
 
 export default router;

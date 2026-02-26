@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import Feature from '../models/Feature';
 import ModelRegistry from '../models/ModelRegistry';
+import { generateModelCodeFromAI } from '../utils/llmService';
 import mongoose from 'mongoose';
 import * as turf from '@turf/turf';
 import axios from 'axios';
@@ -844,4 +845,60 @@ export const executeTableFormula = async (req: Request, res: Response) => {
     console.error("模型执行错误:", error.response?.data || error.message);
     res.status(500).json({ error: '模型执行异常', details: error.response?.data?.detail || error.message });
   }
+};
+
+// ==========================================
+// 🌟 核心突破：自然语言驱动的模型智能生成 (Text-to-Model)
+// ==========================================
+export const createModelViaNaturalLanguage = async (req: Request, res: Response) => {
+    try {
+        // userDescription 是用户在前端输入的自然语言需求
+        // 比如："帮我写一个灾害敏感性指数计算模型，把前端传进来的所有列做等权重求和，并归一化到0-100之间"
+        const { modelName, displayName, description, parameters, userDescription } = req.body;
+
+        if (!userDescription || !modelName) {
+            return res.status(400).json({ error: "模型名称和需求描述不能为空" });
+        }
+
+        console.log(`[GeoAI Agent] 正在思考并生成模型代码: ${modelName}...`);
+
+        // 1. 唤醒大模型，生成 Python 纯代码
+        const pythonCode = await generateModelCodeFromAI(userDescription);
+        
+        console.log(`[GeoAI Agent] 代码生成完毕，准备注入系统框架。`);
+
+        // 2. 物理隔离写入（复用你之前的逻辑，注入到 python_engine/models）
+        const modelsDir = path.join(process.cwd(), '../python_engine/models');
+        if (!fs.existsSync(modelsDir)) {
+            fs.mkdirSync(modelsDir, { recursive: true });
+        }
+        
+        const fileName = `${modelName.toLowerCase()}.py`;
+        const filePath = path.join(modelsDir, fileName);
+        fs.writeFileSync(filePath, pythonCode, 'utf8');
+
+        // 3. 元数据落库 (MongoDB)
+        const newModel = await ModelRegistry.findOneAndUpdate(
+            { modelName: modelName.toUpperCase() },
+            { 
+                modelName: modelName.toUpperCase(), 
+                displayName: displayName || modelName, 
+                description: description || userDescription, 
+                parameters: parameters || {}, 
+                status: 'active' 
+            },
+            { upsert: true, new: true }
+        );
+
+        res.json({ 
+            code: 200, 
+            message: `🎉 成功！大模型已为您生成并挂载了 ${modelName} 算法。`, 
+            data: newModel,
+            previewCode: pythonCode // 把代码返回给前端，方便用户预览
+        });
+
+    } catch (error: any) {
+        console.error("大模型生成失败:", error);
+        res.status(500).json({ error: error.message || '系统内部异常' });
+    }
 };

@@ -1,6 +1,4 @@
 import { create } from 'zustand';
-// 🌟 修改：顶部导入刚刚写好的服务
-import { geoService } from '../services/geoService';
 
 // 透视配置接口
 export interface PivotConfig {
