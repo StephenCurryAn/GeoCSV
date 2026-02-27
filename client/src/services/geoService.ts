@@ -398,18 +398,8 @@ class GeoService {
   }
 
   // 🌟 新增：公式执行服务调用
-  async executeModelFormula(
-    fileId: string, 
-    modelName: string, 
-    columns: string[], 
-    params: any = {}
-  ) {
-    const response = await apiClient.post('/analysis/execute-formula', {
-      fileId,
-      modelName,
-      columns,
-      params
-    });
+  async executeModelFormula( data: { fileId: string; modelName: string; rawArgs: string[] } ) {
+    const response = await apiClient.post('/analysis/execute-formula', data);
     return response.data;
   };
 

@@ -323,15 +323,41 @@ const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ fileId, fields }) => {
                                             color="#022c22" // 深邃内敛的暗绿色背景，专业不刺眼
                                             mouseEnterDelay={0.3} 
                                             title={
-                                                <div className="flex flex-col gap-1.5 p-1 max-w-50">
+                                                <div className="flex flex-col gap-2 p-1 max-w-70"> {/* 稍微加宽一点以容纳参数说明 */}
+                                                    {/* 1. 模型标题 */}
                                                     <div className="text-base font-bold text-emerald-400 border-b border-emerald-800/50 pb-1">
                                                         {model.displayName || model.modelName}
                                                     </div>
+                                                    
+                                                    {/* 2. 模型核心描述 */}
                                                     <div className="text-sm text-gray-300 leading-relaxed">
                                                         {model.description}
                                                     </div>
-                                                    <div className="mt-1 px-2 py-1 bg-black/50 rounded border border-emerald-800/80 font-mono text-sm text-emerald-400 break-all shadow-[0_0_8px_rgba(52,211,153,0.1)_inset]">
-                                                        输入： ={model.modelName}(...)
+
+                                                    {/* 🌟 3. 新增：参数元数据动态渲染区 */}
+                                                    {model.parameters && model.parameters.length > 0 && (
+                                                        <div className="flex flex-col gap-1 bg-emerald-950/40 p-2 rounded-md border border-emerald-900/60 mt-1">
+                                                            <span className="text-[10px] text-emerald-500 font-bold uppercase tracking-widest mb-0.5">
+                                                                参数规范 (Parameters)
+                                                            </span>
+                                                            {model.parameters.map((p: any, idx: number) => (
+                                                                <div key={idx} className="text-xs text-gray-300 flex items-start leading-tight">
+                                                                    <span className="text-emerald-400 font-mono mr-1.5 shrink-0">
+                                                                        [{idx + 1}] {p.name}:
+                                                                    </span>
+                                                                    <span className="text-gray-400">{p.description}</span>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+
+                                                    {/* 🌟 4. 修改：动态拼接精准的调用语法 */}
+                                                    <div className="mt-1 px-2 py-1.5 bg-black/60 rounded border border-emerald-800/80 font-mono text-xs text-emerald-400 break-all shadow-[0_0_8px_rgba(52,211,153,0.1)_inset]">
+                                                        输入： <b className="text-white">={model.modelName}</b>(
+                                                        {model.parameters && model.parameters.length > 0 
+                                                            ? <span className="text-emerald-200">{model.parameters.map((p: any) => p.name).join(', ')}</span>
+                                                            : ''
+                                                        })
                                                     </div>
                                                 </div>
                                             }

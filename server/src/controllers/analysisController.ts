@@ -790,16 +790,49 @@ export const registerModelByAI = async (req: Request, res: Response) => {
 // ==========================================
 export const executeTableFormula = async (req: Request, res: Response) => {
   try {
-    const { fileId, modelName, columns, params } = req.body;
+    const { fileId, modelName, rawArgs } = req.body;
     
+    // 兼容老代码接口
+    let reqColumns: string[] = req.body.columns || [];
+    let reqParams: Record<string, any> = req.body.params || {};
+
     const modelDef = await ModelRegistry.findOne({ modelName: modelName.toUpperCase() });
     if (!modelDef) return res.status(404).json({ error: '模型未注册' });
+
+    // 🌟 核心突破：动态参数分类与路由
+    if (rawArgs && Array.isArray(rawArgs)) {
+        reqColumns = [];
+        reqParams = {};
+        
+        rawArgs.forEach((arg: string, index: number) => {
+            const numVal = Number(arg);
+            // 去元数据里找参数真正的名字，比如 'eps', 'min_samples'
+            const paramName = modelDef.parameters[index]?.name || `param_${index}`;
+
+            if (!isNaN(numVal) && arg.trim() !== '') {
+                // 1. 如果是纯数字 -> 路由到 Python Parameters (作为数值型超参数)
+                reqParams[paramName] = numVal;
+            } else if ((arg.startsWith('"') && arg.endsWith('"')) || (arg.startsWith("'") && arg.endsWith("'"))) {
+                // 2. 如果是用引号包裹的字符串 -> 路由到 Python Parameters
+                reqParams[paramName] = arg.slice(1, -1);
+            } else {
+                // 3. 其他情况 -> 路由为数据源的列名 (去数据库捞这个列的数据)
+                reqColumns.push(arg);
+            }
+        });
+    }
+
+    console.log(`[模型调度] 数据列: ${reqColumns}, 提取的超参数:`, reqParams);
 
     // 从数据库中极速提取所需数据，并进行终极防呆处理 (空值补0)
     const features = await Feature.find({ fileId }).lean(); 
     const attributeData = features.map(f => {
-      const row: any = {};
-      columns.forEach((col: string) => { 
+      const row: any = {
+        _geometry: f.geometry // 无论用户传不传，骨架(几何坐标)必定下发
+      };
+      
+      // 只拉取判定为“数据列”的属性
+      reqColumns.forEach((col: string) => { 
         const val = f.properties[col];
         if (val === undefined || val === null || val === '') {
             row[col] = 0;
@@ -810,11 +843,11 @@ export const executeTableFormula = async (req: Request, res: Response) => {
       return row;
     });
 
-    // 内存极速转发给 Python (使用 axios)
+    // 内存极速转发给 Python
     const response = await axios.post<PythonApiResponse>(`${PYTHON_API_URL}/models/execute`, {
       model_name: modelName,
       data: attributeData,
-      parameters: params || {}
+      parameters: reqParams // 发送给 Python 的超参数字典！
     });
 
     const resultArray = response.data.result_array;

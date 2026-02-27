@@ -1,11 +1,13 @@
 import 'ag-grid-community/styles/ag-grid.css'; 
 import 'ag-grid-community/styles/ag-theme-alpine.css'; 
 import React, { useEffect, useState, useRef } from 'react';
+import { createPortal } from 'react-dom'; // 🌟 核心：引入传送门技术
 import { AgGridReact } from 'ag-grid-react'; 
 import { type ColDef, ModuleRegistry, AllCommunityModule } from 'ag-grid-community'; 
 import { App, Empty, Button, Space, Popconfirm, Pagination } from 'antd'; // ... 引入 antd 组件
 import { PlusOutlined, DeleteOutlined, TableOutlined, MinusSquareOutlined, DownloadOutlined } from '@ant-design/icons';
 import { geoService } from '../../../services/geoService';
+import apiClient from '../../../services/apiClient';
 
 // 注册模块
 // 向 AG Grid 的全局系统注册‘社区版’的所有功能模块，以便表格能正常运行
@@ -37,6 +39,228 @@ interface DataPivotProps {
     onDeleteColumn?: (fieldName: string) => void;
 }
 
+// ==========================================
+// 🌟 纯净大圆满版：双段式智能公式编辑器 (支持模型+列名双重补全)
+// ==========================================
+const FormulaCellEditor = (props: any) => {
+    const [value, setValue] = useState(props.value || '');
+    const [suggestions, setSuggestions] = useState<string[]>([]);
+    const [focusedIndex, setFocusedIndex] = useState(0);
+    const [showDropdown, setShowDropdown] = useState(false);
+    const [dropdownRect, setDropdownRect] = useState({ top: 0, left: 0, width: 0 });
+    
+    // 🌟 新增状态：记录当前下拉框里显示的是“模型(model)”还是“列名(column)”
+    const [suggestionType, setSuggestionType] = useState<'model' | 'column'>('column');
+
+    const inputRef = useRef<HTMLInputElement>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
+    const listRef = useRef<HTMLUListElement>(null);
+
+    // 1. 获取当前表格所有的列名
+    const availableColumns = props.api?.getColumnDefs()
+        ?.map((col: any) => col.field)
+        .filter((k: string) => k && !k.startsWith('_') && k !== 'id' && k !== 'cp' && !k.startsWith('__empty')) || [];
+
+    // 🌟 2. 获取可用的模型列表 (从外层通过 cellEditorParams 传入，如果没有传则给几个默认兜底)
+    const availableModels = props.availableModels || [
+        'DBSCAN_SPATIAL_CLUSTERING', 
+        'BUFFER_AREA', 
+        'KMEANS_CLUSTERING',
+        'SPATIAL_JOIN'
+    ];
+
+    const isFormulaMode = String(value).startsWith('=');
+    const defaultCellWidth = props.column ? props.column.getActualWidth() : 200;
+
+    useEffect(() => {
+        inputRef.current?.focus();
+        if (String(props.value).startsWith('=')) {
+            const len = String(props.value).length;
+            setTimeout(() => inputRef.current?.setSelectionRange(len, len), 0);
+        }
+    }, [props.value]);
+
+    const updateDropdownPosition = () => {
+        if (containerRef.current) {
+            const rect = containerRef.current.getBoundingClientRect();
+            setDropdownRect({
+                top: rect.bottom + 4,
+                left: rect.left,
+                width: Math.max(rect.width, 260)
+            });
+        }
+    };
+
+    useEffect(() => {
+        if (showDropdown) {
+            updateDropdownPosition();
+            const handleScroll = (e: Event) => {
+                if (listRef.current && (e.target === listRef.current || listRef.current.contains(e.target as Node))) return;
+                setShowDropdown(false);
+            };
+            window.addEventListener('scroll', handleScroll, true);
+            return () => window.removeEventListener('scroll', handleScroll, true);
+        }
+    }, [showDropdown, value]);
+
+    useEffect(() => {
+        if (showDropdown && listRef.current) {
+            const focusedItem = listRef.current.children[focusedIndex] as HTMLElement;
+            if (focusedItem) focusedItem.scrollIntoView({ block: 'nearest' });
+        }
+    }, [focusedIndex, showDropdown]);
+
+    const getWordContext = (text: string, cursorPosition: number) => {
+        let start = cursorPosition - 1;
+        while (start >= 0 && !['(', ',', ' '].includes(text[start])) start--;
+        start++;
+        return { word: text.slice(start, cursorPosition), start, end: cursorPosition };
+    };
+
+    // 🌟 核心升级：智能判断当前该提示什么
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const val = e.target.value;
+        setValue(val);
+        
+        if (props.onValueChange) props.onValueChange(val);
+
+        const cursor = e.target.selectionStart || 0;
+
+        if (val.startsWith('=')) {
+            const hasParen = val.includes('(');
+
+            if (!hasParen) {
+                // 🚀 模式 1：正在输入模型名称 (刚打了 '='，还没打 '(' )
+                const typedModel = val.slice(1).toUpperCase(); // 提取 = 后面的文字
+                const matchedModels = availableModels.filter((m: string) => m.toUpperCase().includes(typedModel));
+                setSuggestions(matchedModels);
+                setShowDropdown(matchedModels.length > 0);
+                setFocusedIndex(0);
+                setSuggestionType('model'); // 标记为模型提示模式
+            } else {
+                // 🚀 模式 2：正在输入参数/列名 (已经打出了 '(' )
+                const { word } = getWordContext(val, cursor);
+                if (val[cursor - 1] === '(' || val[cursor - 1] === ',' || val[cursor - 1] === ' ' || word.length > 0) {
+                    const matched = availableColumns.filter((c: string) => c.toLowerCase().includes(word.toLowerCase()));
+                    setSuggestions(matched);
+                    setShowDropdown(matched.length > 0);
+                    setFocusedIndex(0);
+                    setSuggestionType('column'); // 标记为列名提示模式
+                } else {
+                    setShowDropdown(false);
+                }
+            }
+        } else {
+            setShowDropdown(false);
+        }
+    };
+
+    // 🌟 核心升级：根据提示类型，执行不同的插入逻辑
+    const insertSuggestion = (suggestion: string) => {
+        let newVal = '';
+        let newCursor = 0;
+
+        if (suggestionType === 'model') {
+            // 如果你选的是模型，直接补全模型名并自动加上左括号 "DBSCAN("
+            newVal = '=' + suggestion + '(';
+            newCursor = newVal.length;
+        } else {
+            // 如果你选的是列名，走原来的逻辑插入单词
+            const cursor = inputRef.current?.selectionStart || 0;
+            const { start, end } = getWordContext(value, cursor);
+            newVal = value.slice(0, start) + suggestion + value.slice(end);
+            newCursor = start + suggestion.length;
+        }
+
+        setValue(newVal);
+        if (props.onValueChange) props.onValueChange(newVal);
+        setShowDropdown(false);
+        
+        // 恢复焦点并让光标跟在刚插入的词后面
+        setTimeout(() => {
+            inputRef.current?.setSelectionRange(newCursor, newCursor);
+            inputRef.current?.focus();
+            
+            // 🌟 极限体验优化：如果你刚补全了模型名并加了 "("，我们主动触发一次事件让它立刻弹出列名提示！
+            if (suggestionType === 'model') {
+                const fakeEvent = { target: { value: newVal, selectionStart: newCursor } } as any;
+                handleChange(fakeEvent);
+            }
+        }, 10);
+    };
+
+    useEffect(() => {
+        const inputEl = inputRef.current;
+        if (!inputEl) return;
+        const stopEditing = props.stopEditing;
+
+        const handleNativeKeyDown = (e: KeyboardEvent) => {
+            if (showDropdown) {
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault(); e.stopImmediatePropagation(); setFocusedIndex(p => (p + 1) % suggestions.length);
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault(); e.stopImmediatePropagation(); setFocusedIndex(p => (p - 1 + suggestions.length) % suggestions.length);
+                } else if (['Enter', 'Tab', ' '].includes(e.key)) {
+                    e.preventDefault(); e.stopImmediatePropagation(); insertSuggestion(suggestions[focusedIndex]);
+                } else if (e.key === 'Escape') {
+                    e.stopImmediatePropagation(); setShowDropdown(false);
+                }
+            } else {
+                if (['ArrowLeft', 'ArrowRight'].includes(e.key)) {
+                    e.stopImmediatePropagation();
+                }
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (stopEditing) stopEditing();
+                }
+            }
+        };
+
+        inputEl.addEventListener('keydown', handleNativeKeyDown, { capture: true });
+        return () => inputEl.removeEventListener('keydown', handleNativeKeyDown, { capture: true });
+    }, [showDropdown, suggestions, focusedIndex, value, props.stopEditing]); 
+
+    const DropdownPortal = () => {
+        if (!showDropdown || suggestions.length === 0) return null;
+        return createPortal(
+            <ul ref={listRef} className="ag-custom-component-popup fixed z-999999 bg-[#1a2332] border border-cyan-700/80 rounded-md shadow-[0_10px_40px_rgba(0,0,0,0.8)] max-h-56 overflow-y-auto custom-scrollbar m-0 p-1 list-none overscroll-contain"
+                style={{ top: dropdownRect.top, left: dropdownRect.left, width: dropdownRect.width }}
+                onMouseDown={(e) => {
+                    e.stopPropagation(); e.nativeEvent.stopImmediatePropagation();
+                    if (e.target !== listRef.current) e.preventDefault();
+                    else {
+                        const restoreFocus = () => { inputRef.current?.focus(); window.removeEventListener('mouseup', restoreFocus); };
+                        window.addEventListener('mouseup', restoreFocus);
+                    }
+                }}
+                onWheel={(e) => { e.stopPropagation(); e.nativeEvent.stopImmediatePropagation(); }}
+            >
+                {suggestions.map((s, i) => (
+                    <li key={s} className={`px-3 py-2 cursor-pointer text-sm font-mono transition-all rounded flex items-center ${i === focusedIndex ? 'bg-cyan-600/90 text-white font-bold' : 'text-gray-300 hover:bg-cyan-900/40'}`}
+                        onMouseDown={(e) => { e.preventDefault(); insertSuggestion(s); }}>
+                        {/* 🌟 视觉优化：模型名前面用紫色圆点，列名前面用青色圆点，一眼区分！ */}
+                        <span className={`w-2 h-2 rounded-full mr-2 shrink-0 ${
+                            i === focusedIndex 
+                                ? 'bg-white shadow-[0_0_5px_white]' 
+                                : suggestionType === 'model' ? 'bg-purple-500 opacity-60' : 'bg-cyan-500 opacity-60'
+                        }`}></span>
+                        <span className="truncate">{s}</span>
+                    </li>
+                ))}
+            </ul>, document.body
+        );
+    };
+
+    return (
+        <div ref={containerRef} className={`flex items-center w-full h-full px-2 transition-all duration-300 ease-out box-border ${isFormulaMode ? 'bg-geo-dark shadow-[inset_0_0_0_2px_#06b6d4]' : 'bg-[#1f2937] shadow-[inset_0_0_0_1px_#3b82f6]' }`}
+            style={{ width: isFormulaMode ? Math.max(defaultCellWidth, 300) : defaultCellWidth, height: 40, borderRadius: '4px' }}>
+            {isFormulaMode && <span className="text-cyan-400 font-mono text-sm mr-2 font-bold select-none shrink-0 drop-shadow-[0_0_4px_rgba(6,182,212,0.8)]">ƒx</span>}
+            <input ref={inputRef} value={value} onChange={handleChange} placeholder={isFormulaMode ? "等待输入模型或参数..." : "输入数值..."} className={`w-full h-full bg-transparent outline-none font-mono text-sm border-none shadow-none ${isFormulaMode ? 'text-cyan-50' : 'text-gray-100'}`} style={{ minWidth: 0 }} />
+            <DropdownPortal />
+        </div>
+    );
+};
+
 const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, pagination, onPageChange, 
     onRowClick, selectedFeature, onDataChange, 
     onAddRow, onDeleteRow, onAddColumn, onDeleteColumn }) => {
@@ -51,6 +275,31 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
     const [columnDefs, setColumnDefs] = useState<ColDef[]>([]);
     // 记录当前选中的行索引，用于删除行
     const [selectedRecordId, setSelectedRecordId] = useState<string | number | null>(null);
+    // 🌟 1. 新增：存储后端真实模型列表的状态
+    const [modelList, setModelList] = useState<string[]>([]);
+    
+    // 🌟 2. 新增：组件初始化时，向后端请求活跃模型列表
+    useEffect(() => {
+        const fetchModels = async () => {
+            try {
+                // 调用我们在 geoService 中写好的方法
+                const res = await apiClient.get('/analysis/models');
+                
+                // 严格按照你后端的结构 { code: 200, data: models } 解析
+                if (res && res.data.code === 200 && Array.isArray(res.data.data)) {
+                    // 提取出所有的 modelName (如 "LSI_AHP") 供编辑器补全使用
+                    const modelNames = res.data.data.map((model: any) => model.modelName);
+                    setModelList(modelNames);
+                    console.log("✅ 成功拉取真实模型列表:", modelNames);
+                }
+            } catch (error) {
+                console.error("❌ 获取真实模型列表失败:", error);
+                // 兜底方案：如果请求失败，留几个默认的防止功能直接瘫痪
+                setModelList(['DBSCAN_SPATIAL_CLUSTERING', 'KMEANS_CLUSTERING']);
+            }
+        };
+        fetchModels();
+    }, []); // 空依赖数组，确保只加载一次 
 
     // data 现在直接是数组了，不需要判断 FeatureCollection 
     useEffect(() => {
@@ -61,25 +310,9 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
     }
     // ✅data 是 features 数组，直接处理
     // 因为App组件中是data={currentData?.features || []}传过来的数组 
-    processGeoJSONFeatures(data);
+    processGeoJSONFeatures(data, modelList);
 
-    // 原来的分类处理
-    // const ext = fileName.split('.').pop()?.toLowerCase();
-    // if (
-    //     ext === 'json' || 
-    //     ext === 'geojson' || 
-    //     ext === 'shp' || 
-    //     (data.type === 'FeatureCollection' && Array.isArray(data.features))
-    // ) {
-    //   processGeoJSON(data);
-    // } else {
-    //   // 处理普通数组 (CSV/Excel 转换来的)
-    //   if (Array.isArray(data)) {
-    //     processArrayData(data);
-    //   }
-    // }
-
-    }, [data, fileName]);
+    }, [data, fileName, modelList]);
 
     // 监听 selectedFeature，同步高亮表格行
     useEffect(() => {
@@ -112,7 +345,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
     /**
      * 通用列定义生成函数 (修复 Warning #48)
      */
-    const generateColumnDefs = (rows: any[]) => {
+    const generateColumnDefs = (rows: any[], models: string[]) => {
         if (rows.length === 0) return [];
         // 定义不可编辑的字段 (例如 ID 和 坐标)
         const readOnlyFields = ['id', '_geometry', 'cp', '_cp', '_lng', '_lat', '_geom_coords'];
@@ -147,7 +380,12 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
                     suppressAutoSize: isGeomCoordsCol, 
 
                     editable: !readOnlyFields.includes(key),
-                    cellEditor: 'agTextCellEditor',
+                    cellEditor: FormulaCellEditor, // 🌟 修改为智能编辑器
+                    cellEditorPopup: true, // 🌟 新增：显式声明为弹窗模式
+                    // 🌟 修改 2：把这里写死的数组替换为传入的真实模型数组！
+                    cellEditorParams: { 
+                        availableModels: models.length > 0 ? models : ['DBSCAN_SPATIAL_CLUSTERING'] 
+                    },
                     valueFormatter: (params: any) => {
                         const val = params.value;
                         if (typeof val === 'object' && val !== null) {
@@ -165,7 +403,12 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
             editable: true,
             minWidth: 100,
             width: 150,
-            cellEditor: 'agTextCellEditor'
+            cellEditor: FormulaCellEditor, // 🌟 修改为智能编辑器
+            cellEditorPopup: true, // 🌟 新增：显式声明为弹窗模式
+            // 🌟 修改 3：把这里写死的数组替换为传入的真实模型数组！
+            cellEditorParams: { 
+                availableModels: models.length > 0 ? models : ['DBSCAN_SPATIAL_CLUSTERING'] 
+            }
         }));
 
         // 返回合并后的表头
@@ -173,51 +416,36 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
     };
 
     // ✅把 processGeoJSON 改造一下，只处理 features 数组
-    const processGeoJSONFeatures = (features: any[]) => {
+    const processGeoJSONFeatures = (features: any[], models: string[]) => {
         const rows = features.map((feature: any) => {
         
-
-        // let cp = feature.properties?.cp;
-        // ✅移除 Turf 计算，直接读取后端算好的 cp
-        let cp = feature.properties?.cp
-        // cp 解析逻辑
-        // 如果 cp 是字符串 (CSV读取时常见)，尝试解析为数组
+        let cp = feature.properties?.cp;
         if (typeof cp === 'string') {
             try { cp = JSON.parse(cp); } catch(e) {}
         }
 
-        // 如果依然没有有效的 cp 且存在几何数据，使用 Turf.js 计算中心点
-        // (需要确保头部引入了: import { center } from '@turf/turf';)
-        // if ((!cp || !Array.isArray(cp)) && feature.geometry) {
-        //     try {
-        //         const c = center(feature);
-        //         cp = c.geometry.coordinates;
-        //     } catch(e) {}
-        // }
-        
+        // 🌟 终极防死修复：如果后端没传 id，强行生成一个唯一 ID，绝不允许出现 undefined！
+        let uniqueId = feature.properties?.id || feature._id || feature.id;
+        if (uniqueId === undefined || uniqueId === null) {
+            uniqueId = `tmp_${Math.random().toString(36).substr(2, 9)}`;
+        }
+
         // --- 2. 构造基础行数据 ---
-        // 将 properties 扁平化，并添加辅助字段
         const row = {
-          ...feature.properties, // 扁平化属性
-          // 🌟 修复1：强制注入唯一标识符 ID，确保能完美承接后端的回填数据
-          id: feature.properties?.id || feature._id || feature.id,
+          ...feature.properties,
+          id: uniqueId, // 👈 绑定绝对唯一的 ID
           cp: cp, 
           _geometry: feature.geometry?.type || 'Unknown'
-          // ...
         };
         
-        // --- 3. 注入导出用的几何字段 (用于 CSV 导出) ---
+        // --- 3. 注入导出用的几何字段 ---
         if (feature.geometry) {
             const gType = feature.geometry.type;
             const coords = feature.geometry.coordinates;
-
             if (gType === 'Point' && Array.isArray(coords) && coords.length >= 2) {
-                // 如果是点，拆分成 _lng 和 _lat 两列，方便导出后直接查看
                 row['_lng'] = coords[0];
                 row['_lat'] = coords[1];
             } else {
-                // 如果是面/线，把复杂的坐标数组转成字符串保存
-                // 这样导出 CSV 时，这一格会包含完整的几何结构数据
                 row['_geom_coords'] = JSON.stringify(coords);
             }
         }
@@ -225,59 +453,8 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
       });
 
       setRowData(rows);
-      setColumnDefs(generateColumnDefs(rows));
+      setColumnDefs(generateColumnDefs(rows, models));
     };
-
-    // 原始的processGeoJSON函数
-    // const processGeoJSON = (geoData: any) => {
-    //     if (geoData.type === 'FeatureCollection' && Array.isArray(geoData.features)) {
-    //       const rows = geoData.features.map((feature: any) => {
-    //         let cp = feature.properties.cp;
-            
-    //         // 如果没有 cp 或 cp 是字符串 ，尝试修复
-    //         // JSON.parse 是把 JSON 格式的字符串 转换成 JavaScript 对象或数组
-    //         if (typeof cp === 'string') {
-    //             try { cp = JSON.parse(cp); } catch(e) {}
-    //         }
-    //         // 依然没有，则计算
-    //         if ((!cp || !Array.isArray(cp)) && feature.geometry) {
-    //             try {
-    //                 const c = center(feature);
-    //                 cp = c.geometry.coordinates;
-    //             } catch(e) {}
-    //         }
-    //         // 准备基础属性
-    //         const row = {
-    //           ...feature.properties,
-    //           cp: cp, 
-    //           _geometry: feature.geometry?.type || 'Unknown' 
-    //         };
-
-    //         // 注入导出用的几何字段
-    //         if (feature.geometry) {
-    //             const gType = feature.geometry.type;
-    //             const coords = feature.geometry.coordinates;
-
-    //             if (gType === 'Point' && Array.isArray(coords) && coords.length >= 2) {
-    //                 // 如果是点，拆分成两列，方便 CSV 导出后直接用
-    //                 row['_lng'] = coords[0];
-    //                 row['_lat'] = coords[1];
-    //             } else {
-    //                 // 如果是面/线，把复杂的坐标数组转成字符串
-    //                 // 这样导出 CSV 时，这一格会包含完整的几何结构数据
-    //                 row['_geom_coords'] = JSON.stringify(coords);
-    //             }
-    //         }
-    //         return row;
-    //       });
-
-    //       setRowData(rows);
-    //       // 使用提取出来的通用函数
-    //       setColumnDefs(generateColumnDefs(rows));
-    //     } else {
-    //         console.warn('不是标准的 FeatureCollection GeoJSON');
-    //     }
-    //   };
 
     /**
      * 导出 CSV 处理函数
@@ -510,6 +687,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
 
             // 🌟 修改：升级单元格修改事件，拦截公式输入并触发微服务计算
             onCellValueChanged={async (event) => {
+                console.log("👉 [事件触发] onCellValueChanged 被成功唤醒！新值是:", event.newValue);
                 const { newValue, oldValue, colDef, node, data } = event;
                 const field = colDef.field;
 
@@ -531,38 +709,40 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
                     if (match) {
                         const modelName = match[1];
                         
-                        // 🌟 终极防呆解析法：彻底兼容空格、中英文逗号、甚至用户误加的单双引号
-                        // 1. 提取用户输入的原始列名（去空格、去引号，可能大小写不对）
-                        const rawColumns = match[2]
+                        // 1. 提取用户输入的原始参数数组
+                        const rawArgs = match[2]
                             .split(/[,，]/)
-                            .map((s: string) => s.trim().replace(/^['"]|['"]$/g, ''))
+                            .map((s: string) => s.trim())
                             .filter((s: string) => s.length > 0);
                         
-                        // 🌟 核心修复：获取表格底层真实的字段名字典
-                        // event.api.getColumnDefs() 能拿到所有列配置，col.field 就是数据库里原汁原味的真实名字
                         const allRealFields = event.api.getColumnDefs()?.map((col: any) => col.field) || [];
 
-                        // 🌟 智能大小写矫正：不区分大小写地去匹配，然后强制转换为底层的真实名字！
-                        const columns = rawColumns.map(inputCol => {
+                        // 🌟 2. 核心修复：智能参数放行
+                        // 如果它匹配到了某个列名，就矫正大小写；如果匹配不到（比如是 "0.1"），直接原样保留，不再报错！
+                        const processedArgs = rawArgs.map(arg => {
+                            const cleanArg = arg.replace(/^['"]|['"]$/g, ''); // 尝试去掉引号对比列名
                             const realCol = allRealFields.find(field => 
-                                field && field.toLowerCase() === inputCol.toLowerCase()
+                                field && field.toLowerCase() === cleanArg.toLowerCase()
                             );
                             
-                            // 如果连忽略大小写都匹配不上，说明用户真的敲错列名了，直接报错拦截
-                            if (!realCol) {
-                                throw new Error(`表格中找不到列: "${inputCol}"，请检查拼写`);
-                            }
-                            return realCol; // 返回矫正后的真实名字 (比如把 CHILDNUM 矫正回 childNum)
+                            // 找不到列名不报错！把它当成超参数发给后端
+                            return realCol ? realCol : arg; 
                         });
 
                         console.log("🔥 准备发给后端的真实模型名:", modelName);
-                        console.log("🔥 大小写矫正成功！发给后端的精确列名:", columns);
+                        console.log("🔥 发给后端的动态参数数组:", processedArgs);
 
                         // 界面反馈：临时改变当前格子的文字
                         node.setDataValue(field!, "⏳ 计算中...");
 
                         try {
-                            const responseData = await geoService.executeModelFormula(fileId, modelName, columns);
+                            // 🌟 3. 修改接口调用，传入统一的 rawArgs 对象
+                            const responseData = await geoService.executeModelFormula({
+                                fileId: fileId,
+                                modelName: modelName,
+                                rawArgs: processedArgs 
+                            });
+
                             const { resultColName, resultData } = responseData;
 
                             if (!resultData || !Array.isArray(resultData)) {
