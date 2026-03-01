@@ -61,13 +61,20 @@ const FormulaCellEditor = (props: any) => {
         ?.map((col: any) => col.field)
         .filter((k: string) => k && !k.startsWith('_') && k !== 'id' && k !== 'cp' && !k.startsWith('__empty')) || [];
 
-    // 🌟 2. 获取可用的模型列表 (从外层通过 cellEditorParams 传入，如果没有传则给几个默认兜底)
-    const availableModels = props.availableModels || [
-        'DBSCAN_SPATIAL_CLUSTERING', 
-        'BUFFER_AREA', 
-        'KMEANS_CLUSTERING',
-        'SPATIAL_JOIN'
-    ];
+    // 🌟 核心修复 1：将 availableModels 改为 State，并使用外部传入的值作为初始缓存，彻底删除硬编码兜底！
+    const [availableModels, setAvailableModels] = useState<string[]>(props.availableModels || []);
+
+    // 🌟 核心修复 2：【JIT 实时刷新机制】
+    // 每次双击单元格进入编辑状态时，静默向后端拉取一次最新模型列表！
+    // 这样不用刷新网页，AI 刚生成的模型立刻出现，删掉的模型立刻消失！
+    useEffect(() => {
+        apiClient.get('/analysis/models').then(res => {
+            if (res && res.data.code === 200 && Array.isArray(res.data.data)) {
+                // 拿到数据库里最新活跃的模型
+                setAvailableModels(res.data.data.map((m: any) => m.modelName));
+            }
+        }).catch(e => console.error("静默刷新实时模型列表失败", e));
+    }, []);
 
     const isFormulaMode = String(value).startsWith('=');
     const defaultCellWidth = props.column ? props.column.getActualWidth() : 200;
@@ -353,7 +360,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
 
         // 1. 生成基于数据的真实列
         const baseCols = keys
-            .filter(k => !['_cp'].includes(k))
+            .filter(k => !['_cp'].includes(k) && !k.startsWith('__empty_col_'))
             .map(key => {
                 // ✅ 判断当前列是否为那个包含超级长字符串的“几何坐标列”
                 const isGeomCoordsCol = (key === '_geom_coords');
@@ -384,7 +391,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
                     cellEditorPopup: true, // 🌟 新增：显式声明为弹窗模式
                     // 🌟 修改 2：把这里写死的数组替换为传入的真实模型数组！
                     cellEditorParams: { 
-                        availableModels: models.length > 0 ? models : ['DBSCAN_SPATIAL_CLUSTERING'] 
+                        availableModels: models
                     },
                     valueFormatter: (params: any) => {
                         const val = params.value;
@@ -407,7 +414,7 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
             cellEditorPopup: true, // 🌟 新增：显式声明为弹窗模式
             // 🌟 修改 3：把这里写死的数组替换为传入的真实模型数组！
             cellEditorParams: { 
-                availableModels: models.length > 0 ? models : ['DBSCAN_SPATIAL_CLUSTERING'] 
+                availableModels: models
             }
         }));
 

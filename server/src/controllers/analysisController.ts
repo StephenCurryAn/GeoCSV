@@ -10,10 +10,11 @@ import path from 'path';
 
 // WSL2 中 FastAPI 运行的地址
 const PYTHON_API_URL = 'http://127.0.0.1:8000/api';
-// 1. 定义 Python API 的返回结构
+// 更新后的 Python API 返回结构 (API 契约)
 interface PythonApiResponse {
   status: string;
-  result_array: number[]; // 明确告诉 TS 这是一个数字数组
+  result_col_name: string;
+  result_data: Array<{ id: string; score: number }>; // 明确告诉 TS 这是一个包含 id 和 score 的对象数组
   execution_time_ms: number;
 }
 
@@ -786,7 +787,7 @@ export const registerModelByAI = async (req: Request, res: Response) => {
 };
 
 // ==========================================
-// 2. 核心数据透视接口 (高速数据泵)
+// 2. 核心数据透视接口 (高速调度网关 BFF)
 // ==========================================
 export const executeTableFormula = async (req: Request, res: Response) => {
   try {
@@ -796,83 +797,60 @@ export const executeTableFormula = async (req: Request, res: Response) => {
     let reqColumns: string[] = req.body.columns || [];
     let reqParams: Record<string, any> = req.body.params || {};
 
-    const modelDef = await ModelRegistry.findOne({ modelName: modelName.toUpperCase() });
-    if (!modelDef) return res.status(404).json({ error: '模型未注册' });
+    let modelDef = await ModelRegistry.findOne({ modelName: modelName.toUpperCase() });
+    if (!modelDef) {
+        console.warn(`[BFF 警告] MongoDB 未找到模型元数据: ${modelName}，将尝试直接穿透调度到底层引擎...`);
+        // 构造一个虚拟的 modelDef，防止后面映射参数时报错
+        modelDef = { parameters: [] } as any; 
+    }
 
-    // 🌟 核心突破：动态参数分类与路由
+    // 🌟 核心突破：动态参数分类与路由 (保持原有优秀逻辑)
     if (rawArgs && Array.isArray(rawArgs)) {
         reqColumns = [];
         reqParams = {};
         
         rawArgs.forEach((arg: string, index: number) => {
             const numVal = Number(arg);
-            // 去元数据里找参数真正的名字，比如 'eps', 'min_samples'
-            const paramName = modelDef.parameters[index]?.name || `param_${index}`;
+            const paramName = modelDef?.parameters?.[index]?.name || `param_${index}`;
 
             if (!isNaN(numVal) && arg.trim() !== '') {
-                // 1. 如果是纯数字 -> 路由到 Python Parameters (作为数值型超参数)
                 reqParams[paramName] = numVal;
             } else if ((arg.startsWith('"') && arg.endsWith('"')) || (arg.startsWith("'") && arg.endsWith("'"))) {
-                // 2. 如果是用引号包裹的字符串 -> 路由到 Python Parameters
                 reqParams[paramName] = arg.slice(1, -1);
             } else {
-                // 3. 其他情况 -> 路由为数据源的列名 (去数据库捞这个列的数据)
                 reqColumns.push(arg);
             }
         });
     }
 
-    console.log(`[模型调度] 数据列: ${reqColumns}, 提取的超参数:`, reqParams);
+    console.log(`[BFF调度层] 向底层空间引擎下发计算指令... 文件: ${fileId}, 模型: ${modelName}`);
 
-    // 从数据库中极速提取所需数据，并进行终极防呆处理 (空值补0)
-    const features = await Feature.find({ fileId }).lean(); 
-    const attributeData = features.map(f => {
-      const row: any = {
-        _geometry: f.geometry // 无论用户传不传，骨架(几何坐标)必定下发
-      };
-      
-      // 只拉取判定为“数据列”的属性
-      reqColumns.forEach((col: string) => { 
-        const val = f.properties[col];
-        if (val === undefined || val === null || val === '') {
-            row[col] = 0;
-        } else {
-            row[col] = val;
-        }
-      });
-      return row;
-    });
-
-    // 内存极速转发给 Python
+    // ==========================================
+    // 🌟 终极瘦身：彻底斩断 Node.js 的数据搬运！
+    // ==========================================
+    // 发送给 Python 的不再是数以万计的 JSON 数组，而仅仅是不到 1KB 的“计算指令”
     const response = await axios.post<PythonApiResponse>(`${PYTHON_API_URL}/models/execute`, {
       model_name: modelName,
-      data: attributeData,
-      parameters: reqParams // 发送给 Python 的超参数字典！
+      file_id: fileId,         // 告诉 Python 去拉哪个文件的数据
+      columns: reqColumns,     // 告诉 Python 需要投影提取哪些列
+      parameters: reqParams    // 数值型超参数
+    }); 
+
+    // ==========================================
+    // 🌟 接收轻量级结果与协同渲染
+    // ==========================================
+    // 此时 Python 已经在底层完成了“拉取 -> 计算 -> MongoDB 回写”的闭环！
+    // Node.js 只需要拿到轻量级的绘图数据返回给前端即可。
+    const { result_col_name, result_data, execution_time_ms } = response.data;
+
+    console.log(`[BFF调度层] 底层引擎计算并落盘完毕，总耗时 ${execution_time_ms.toFixed(2)}ms`);
+
+    // 直接返回给前端更新 UI
+    res.json({ 
+        code: 200, 
+        resultColName: result_col_name, 
+        resultData: result_data 
     });
-
-    const resultArray = response.data.result_array;
-    const resultColName = `${modelName}_Score`;
-
-    // 🌟 组装带 ID 的结果返回给前端
-    const resultData: any[] = []; 
-    
-    const bulkOps = features.map((f, index) => {
-      const score = resultArray[index];
-      f.properties[resultColName] = score;
-
-      // 提取当前要素的唯一标识
-      const rowId = f.properties.id || f._id.toString();
-      resultData.push({ id: rowId, score: score });
-
-      return {
-        updateOne: { filter: { _id: f._id }, update: { $set: { properties: f.properties } } }
-      };
-    });
-    
-    Feature.bulkWrite(bulkOps).catch(err => console.error("回写数据库失败", err));
-
-    // 🌟 绝对确认：这里返回的是 resultData！
-    res.json({ code: 200, resultColName, resultData });
 
   } catch (error: any) {
     console.error("模型执行错误:", error.response?.data || error.message);
