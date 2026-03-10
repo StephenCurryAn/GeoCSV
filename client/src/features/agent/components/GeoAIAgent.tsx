@@ -27,7 +27,7 @@ const GeoAIAgent: React.FC = () => {
     
     // 聊天记录状态
     const [chatHistory, setChatHistory] = useState<ChatMessage[]>([
-        { role: 'system', content: '欢迎唤醒 GeoAI 智能铸造中心。请直接用自然语言描述您的空间分析需求，我将自动推导模型参数并生成底层算子代码。' }
+        { role: 'system', content: '欢迎使用智能模型生成器。请直接用自然语言描述您的空间分析需求，我将自动推导模型参数并生成底层算子代码。' }
     ]);
 
     const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -65,7 +65,7 @@ const GeoAIAgent: React.FC = () => {
             setGeneratedCode(response.previewCode);
             setChatHistory(prev => [...prev, { 
                 role: 'agent', 
-                content: `✨ 模型构建完成！已为您命名为【${realDisplayName}】(${realModelName}) 并热挂载至系统。请在右侧终端查看底层逻辑。\n\n💡 调用语法: =${realModelName}()` 
+                content: `模型构建完成！已为您命名为【${realDisplayName}】(${realModelName}) 并挂载至系统。请在右侧终端查看底层逻辑。\n\n 调用语法: =${realModelName}()` 
             }]);
             
             // 发送全局事件，通知 AnalysisPanel 更新模型列表
@@ -104,7 +104,7 @@ const GeoAIAgent: React.FC = () => {
                     <div className="h-12 bg-linear-to-r from-geo-panel to-geo-dark border-b border-blue-500/20 px-5 flex justify-between items-center shrink-0">
                         <div className="flex items-center text-blue-400 font-mono text-xs tracking-widest font-bold drop-shadow-[0_0_8px_rgba(59,130,246,0.6)]">
                             <Sparkles className="w-4 h-4 mr-2" /> 
-                            GEOAI INTELLIGENCE CENTER
+                            GEOAI
                         </div>
                         <button onClick={() => setIsOpen(false)} className="text-slate-400 hover:text-white transition-colors bg-slate-800/50 hover:bg-red-500/80 p-1.5 rounded-full">
                             <X className="w-4 h-4" />

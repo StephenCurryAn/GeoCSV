@@ -9,6 +9,7 @@ export interface IModelRegistry extends Document {
     type: string;
     description: string;
   }[];
+  requiredColumns?: string[];
   status: string;
 }
 
@@ -21,6 +22,7 @@ const ModelRegistrySchema = new Schema({
     type: { type: String, enum: ['column', 'number', 'string'] },
     description: String
   }],
+  requiredColumns: [{ type: String }], // 🌟 新增：记录 AI 解析出的必须列名
   status: { type: String, default: 'active' }
 }, { timestamps: true });
 

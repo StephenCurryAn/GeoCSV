@@ -624,7 +624,8 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                     calculatedOpacity = 0.2 + (normalized * 0.7); 
                 }
 
-                const isSelected = highlightedCategory === item.rowKey;
+                // ✅ 修复后：统统转成字符串进行比对，无视 String 和 Number 的类型差异
+                const isSelected = highlightedCategory != null && String(highlightedCategory) === String(item.rowKey);
                 const hasActiveSelection = !!highlightedCategory;
 
                 let finalColor = calculatedColor;
@@ -638,9 +639,9 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                 let finalLineWidth = 3; // 默认线宽
 
                 // ✅ Point Params (默认值)
-                let finalPointRadius = 6;
+                let finalPointRadius = 4;
                 let finalPointStrokeWidth = 1;
-                let finalPointStrokeColor = '#ffffff';
+                let finalPointStrokeColor = 'rgba(255,255,255,0.2)';
 
                 if (hasActiveSelection) {
                     if (isSelected) {
@@ -656,8 +657,8 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                         finalLineWidth = 6; 
 
                         // ✅ Point: 变大，白边框加粗
-                        finalPointRadius = 10;
-                        finalPointStrokeWidth = 3;
+                        finalPointRadius = 6;
+                        finalPointStrokeWidth = 2;
                         finalPointStrokeColor = '#ffffff';
                     } else {
                         // 未选中: 颜色不变(保留上下文)，但变暗
@@ -672,7 +673,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                         finalLineWidth = 2;
 
                         // ✅ Point: 变小，边框几乎隐形
-                        finalPointRadius = 4; // 稍微变小一点，退居次要位置
+                        finalPointRadius = 1; // 稍微变小一点，退居次要位置
                         finalPointStrokeWidth = 1;
                         finalPointStrokeColor = 'rgba(255,255,255,0.1)'; // 关键：把边框也变暗！
                     }
@@ -695,17 +696,28 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                 pointStrokeColorMatch.push(matchKey, finalPointStrokeColor);
             });
 
-            // Defaults
-            colorMatch.push('#374151');
-            opacityMatch.push(0.1);
-            borderStrokeWidthMatch.push(1);
-            borderStrokeColorMatch.push('rgba(255,255,255,0.1)');
-            mainLineWidthMatch.push(1);
+            // 判断当前是否有任何柱状图被高亮选中
+            const hasAnySelection = !!highlightedCategory;
+
+            // 👇 👇 👇 核心修改：让未参与透视的脏点彻底隐形 👇 👇 👇
+            // Defaults (回退默认值)
+            // 无论有没有选中柱子，未参与分析的数据一律透明、尺寸为0，保持地图绝对干净
             
-            // 点默认值
-            pointRadiusMatch.push(4);               // 默认半径 (未选中时变小)
-            pointStrokeWidthMatch.push(0);          // 默认描边宽度 (无描边)
-            pointStrokeColorMatch.push('rgba(255,255,255,0)'); // 默认描边颜色 (透明)
+            // 基础颜色和透明度
+            colorMatch.push('transparent'); 
+            opacityMatch.push(0.0); // 🌟 永远为0，彻底透明
+            
+            // Polygon (面) 边框
+            borderStrokeWidthMatch.push(0);
+            borderStrokeColorMatch.push('rgba(0,0,0,0)');
+            
+            // Line (线) 宽度
+            mainLineWidthMatch.push(0);
+            
+            // Point (点) 属性
+            pointRadiusMatch.push(0);               // 🌟 半径改为 0，直接消失！
+            pointStrokeWidthMatch.push(0);          // 无描边
+            pointStrokeColorMatch.push('rgba(0,0,0,0)');
             
             // ============ 应用属性 ============
 

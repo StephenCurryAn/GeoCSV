@@ -170,7 +170,7 @@ export const pivotAnalysis = async (req: Request, res: Response) => {
             // 1D 格式化
             finalData = rawResults.map((item, idx) => ({
                 key: idx,
-                rowKey: item._id || '未分类',
+                rowKey: (item._id === null || item._id === undefined || item._id === '') ? '未分类' : item._id,
                 // ✅ [修改] 允许 ridgeline 返回数组
                 value: (method === 'boxplot' || method === 'ridgeline')
                     ? item.value 
@@ -186,7 +186,7 @@ export const pivotAnalysis = async (req: Request, res: Response) => {
             const colSet = new Set<string>();
 
             rawResults.forEach(item => {
-                const rKey = item._id.row || '未分类';
+                const rKey = (item._id.row === null || item._id.row === undefined || item._id.row === '') ? '未分类' : item._id.row;
                 const cKey = String(item._id.col || '未分类'); // 列名必须是字符串
                 const val = typeof item.val === 'number' ? parseFloat(item.val.toFixed(2)) : item.val;
 
@@ -828,13 +828,21 @@ export const executeTableFormula = async (req: Request, res: Response) => {
     // ==========================================
     // 🌟 终极瘦身：彻底斩断 Node.js 的数据搬运！
     // ==========================================
-    // 发送给 Python 的不再是数以万计的 JSON 数组，而仅仅是不到 1KB 的“计算指令”
+    
+    // 🌟 新增：合并前端传来的列（reqColumns）与模型注册时 AI 提取的必填列（requiredColumns）
+    // 用 Set 去重，防止同一个列名传两遍
+    const finalColumns = Array.from(new Set([
+        ...reqColumns, 
+        ...(modelDef?.requiredColumns || []) // 👈 从 MongoDB 里读出 AI 存下的列名
+    ]));
+
+    // 发送给 Python
     const response = await axios.post<PythonApiResponse>(`${PYTHON_API_URL}/models/execute`, {
       model_name: modelName,
-      file_id: fileId,         // 告诉 Python 去拉哪个文件的数据
-      columns: reqColumns,     // 告诉 Python 需要投影提取哪些列
-      parameters: reqParams    // 数值型超参数
-    }); 
+      file_id: fileId,         
+      columns: finalColumns,   // 🌟 将合并后的终极列名数组发给 Python 引擎
+      parameters: reqParams    
+    });
 
     // ==========================================
     // 🌟 接收轻量级结果与协同渲染
@@ -876,7 +884,7 @@ export const createModelViaNaturalLanguage = async (req: Request, res: Response)
         const aiResult = await generateModelCodeFromAI(userDescription);
         
         // 🌟 关键修改：在这里解构出 parameters
-        const { modelName, displayName, description, parameters, pythonCode } = aiResult;
+        const { modelName, displayName, description, parameters, requiredColumns, pythonCode } = aiResult;
 
         console.log(`[GeoAI Agent] 思考完成！模型名: ${modelName}，提取到 ${parameters?.length || 0} 个参数。准备注入系统。`);
 
@@ -898,6 +906,7 @@ export const createModelViaNaturalLanguage = async (req: Request, res: Response)
                 displayName: displayName, 
                 description: description, 
                 parameters: parameters || [], // 🌟 核心：把大模型解析出的参数定义直接存入数据库！
+                requiredColumns: requiredColumns || [], // 🌟 新增：存入必须的列名
                 status: 'active' 
             },
             { upsert: true, new: true }
