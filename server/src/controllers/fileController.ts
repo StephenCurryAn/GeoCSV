@@ -1094,6 +1094,33 @@ export const deleteNode = async (req: Request, res: Response) => {
     }
 };
 
+export const renameColumn = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const { oldName, newName } = req.body;
+
+        if (!oldName || !newName) {
+            return res.status(400).json({ error: '必须提供 oldName 和 newName' });
+        }
+
+        // --- 以下逻辑取决于你后端的数据存储方式 ---
+        
+        // 如果你是存在 MongoDB 的 Feature 集合里：
+        // 使用 $rename 操作符批量更新该文件关联的所有 Feature
+        await Feature.updateMany(
+            { fileId: id }, 
+            { $rename: { [`properties.${oldName}`]: `properties.${newName}` } }
+        );
+
+        // 如果你是直接读写 GeoJSON 文件，需要 fs.readFile -> JSON.parse -> 遍历修改 -> fs.writeFile
+
+        res.status(200).json({ message: '列名修改成功' });
+    } catch (error) {
+        console.error('重命名列出错:', error);
+        res.status(500).json({ error: '服务器内部错误' });
+    }
+};
+
 /**
  * 更新文件 控制器
  * 控制器作用：更新文件内部数据接口

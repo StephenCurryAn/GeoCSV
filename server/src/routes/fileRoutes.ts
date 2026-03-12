@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { uploadFile, createFolder, getFileTree, getFileData,
         renameNode, deleteNode, updateFileData,
-        addRow, deleteRow, addColumn, deleteColumn, exportFile } from '../controllers/fileController';
+        addRow, deleteRow, addColumn, deleteColumn, exportFile, renameColumn } from '../controllers/fileController';
 import upload from '../utils/uploadConfig';
 
 /**
@@ -89,6 +89,8 @@ router.post('/:id/row/delete', deleteRow);
 router.post('/:id/column', addColumn);
 // 4. 删除列
 router.post('/:id/column/delete', deleteColumn);
+// 重命名列名
+router.put('/:id/columns/rename', renameColumn);
 
 /**
  * GET /:id/export

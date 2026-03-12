@@ -21,7 +21,8 @@ import {
     BorderOutlined,         // Square 图标
     ThunderboltOutlined,    // 执行图标
     UndoOutlined,            // 重置图标
-    SaveOutlined
+    SaveOutlined,
+    FilterOutlined
 } from '@ant-design/icons';
 import { useAnalysisStore } from '../../../stores/useAnalysisStore'
 
@@ -177,6 +178,9 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
     const [activeScheme, setActiveScheme] = useState<string>('viridis'); // 当前颜色方案
     const [activeBasemap, setActiveBasemap] = useState<string>('dark'); // 当前底图
     
+    const [uniqueFieldValues, setUniqueFieldValues] = useState<(string | number)[]>([]); // 存放当前字段所有的唯一值
+    const [activeFilterValues, setActiveFilterValues] = useState<(string | number)[]>([]); // 存放当前勾选的值
+
     // ✅状态管理 - 全量数据相关
     const [showAll, setShowAll] = useState(false);
     const [allData, setAllData] = useState<any>(null);
@@ -344,6 +348,81 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
         }
         
     }, [displayData, data, allData, showAll, isGridMode]); // 依赖项加上 data 等
+
+    // ✅ [新增] Effect 3: 提取当前渲染字段的唯一值，作为下拉列表的选项
+    useEffect(() => {
+        // 如果没选字段、或者处于网格模式、或者没数据，清空过滤选项
+        if (!activeField || activeField === 'none' || isGridMode || !displayData) {
+            setUniqueFieldValues([]);
+            setActiveFilterValues([]);
+            return;
+        }
+
+        const valSet = new Set<string | number>();
+        displayData.features.forEach((f: any) => {
+            const val = f.properties[activeField];
+            // 排除 null 和 undefined，但放行 0 和 空字符串
+            if (val !== undefined && val !== null) {
+                valSet.add(val);
+            }
+        });
+
+        // 排序：如果是数字就按大小排，如果是文字就按字母排
+        const uniqueVals = Array.from(valSet).sort((a, b) => {
+            if (typeof a === 'number' && typeof b === 'number') return a - b;
+            return String(a).localeCompare(String(b));
+        });
+
+        setUniqueFieldValues(uniqueVals);
+        setActiveFilterValues(uniqueVals); // 默认全部勾选
+    }, [activeField, displayData, isGridMode]);
+
+    // ✅ [新增] Effect 4: 将用户的过滤选项应用到地图图层 (Filter 属性)
+    useEffect(() => {
+        const map = mapInstance.current;
+        if (!map || !isMapLoaded) return;
+
+        const applyFilter = () => {
+            // 当没有开启过滤或处于网格模式时，恢复默认显示所有
+            if (isGridMode || !activeField || activeField === 'none') {
+                if (map.getLayer('geo-fill-layer')) map.setFilter('geo-fill-layer', ['==', '$type', 'Polygon']);
+                if (map.getLayer('geo-polygon-border')) map.setFilter('geo-polygon-border', ['==', '$type', 'Polygon']);
+                if (map.getLayer('geo-linestring-main')) map.setFilter('geo-linestring-main', ['==', '$type', 'LineString']);
+                if (map.getLayer('geo-point-layer')) map.setFilter('geo-point-layer', ['==', '$type', 'Point']);
+                return;
+            }
+
+            // 如果用户取消了所有的勾选，什么都不渲染
+            if (activeFilterValues.length === 0) {
+                const hideExp: any = ['==', 'id', 'nothing_selected'];
+                if (map.getLayer('geo-fill-layer')) map.setFilter('geo-fill-layer', hideExp);
+                if (map.getLayer('geo-polygon-border')) map.setFilter('geo-polygon-border', hideExp);
+                if (map.getLayer('geo-linestring-main')) map.setFilter('geo-linestring-main', hideExp);
+                if (map.getLayer('geo-point-layer')) map.setFilter('geo-point-layer', hideExp);
+                return;
+            }
+
+            // 👇 核心修复：构建传统过滤语法 ['in', '字段名', '值1', '值2', ...]
+            const filterExp: any = ['in', activeField, ...activeFilterValues];
+
+            // 应用到所有图层，同时保留原有基础的 Geometry 类型过滤
+            if (map.getLayer('geo-fill-layer')) {
+                map.setFilter('geo-fill-layer', ['all', ['==', '$type', 'Polygon'], filterExp] as any);
+            }
+            if (map.getLayer('geo-polygon-border')) {
+                map.setFilter('geo-polygon-border', ['all', ['==', '$type', 'Polygon'], filterExp] as any);
+            }
+            if (map.getLayer('geo-linestring-main')) {
+                map.setFilter('geo-linestring-main', ['all', ['==', '$type', 'LineString'], filterExp] as any);
+            }
+            if (map.getLayer('geo-point-layer')) {
+                map.setFilter('geo-point-layer', ['all', ['==', '$type', 'Point'], filterExp] as any);
+            }
+        };
+
+        applyFilter();
+    }, [activeFilterValues, activeField, isGridMode, isMapLoaded]);
+
 
     // ✅ [新增] 全选/清空处理函数
     const handleSelectAllCategories = () => {
@@ -696,9 +775,6 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                 pointStrokeColorMatch.push(matchKey, finalPointStrokeColor);
             });
 
-            // 判断当前是否有任何柱状图被高亮选中
-            const hasAnySelection = !!highlightedCategory;
-
             // 👇 👇 👇 核心修改：让未参与透视的脏点彻底隐形 👇 👇 👇
             // Defaults (回退默认值)
             // 无论有没有选中柱子，未参与分析的数据一律透明、尺寸为0，保持地图绝对干净
@@ -791,7 +867,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
     };
 
     /**
-     * ✅ [修改] 更新颜色映射 (Choropleth) - 采用“分段阶梯”渲染以增强区分度
+     * ✅ [修改] 更新颜色映射 (Choropleth) - 采用“分段阶梯”渲染以增强区分度，支持值过滤变暗
      */
     const updateChoroplethColors = () => {
         // 卫兵：如果开启了联动模式且符合条件，直接退出
@@ -803,12 +879,25 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
         
         if (!map || !map.getLayer('geo-fill-layer') || !currentDisplayData) return;
 
-        // 1. 如果没有选字段，恢复默认颜色
+        // 1. 如果没有选字段，恢复默认颜色 (全部全亮显示)
         if (!activeField || activeField === 'none') {
-            map.setPaintProperty('geo-fill-layer', 'fill-color', '#00e5ff');
-            // ✅ [修改] 恢复默认时，清除边框或设为透明
-            map.setPaintProperty('geo-fill-layer', 'fill-outline-color', 'rgba(0,0,0,0)'); 
-            map.setPaintProperty('geo-fill-layer', 'fill-opacity', 0.6);
+            if (map.getLayer('geo-fill-layer')) {
+                map.setPaintProperty('geo-fill-layer', 'fill-color', '#00e5ff');
+                map.setPaintProperty('geo-fill-layer', 'fill-outline-color', 'rgba(0,0,0,0)'); 
+                map.setPaintProperty('geo-fill-layer', 'fill-opacity', 0.6);
+            }
+            if (map.getLayer('geo-linestring-main')) {
+                map.setPaintProperty('geo-linestring-main', 'line-color', '#00e5ff');
+                map.setPaintProperty('geo-linestring-main', 'line-opacity', 0.8);
+                map.setPaintProperty('geo-linestring-main', 'line-width', 3);
+            }
+            if (map.getLayer('geo-point-layer')) {
+                map.setPaintProperty('geo-point-layer', 'circle-color', '#00e5ff');
+                map.setPaintProperty('geo-point-layer', 'circle-opacity', 1);
+                map.setPaintProperty('geo-point-layer', 'circle-radius', 6);
+                map.setPaintProperty('geo-point-layer', 'circle-stroke-width', 1);
+                map.setPaintProperty('geo-point-layer', 'circle-stroke-color', '#ffffff');
+            }
             return;
         }
 
@@ -830,57 +919,70 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
 
         if (min === Infinity || max === -Infinity) return; // 没数据
         
-        // 处理 min === max 的情况
+        // 4. 构建基础颜色表达式 (Base Expression)
+        let baseColorExpression: any;
         if (min === max) {
-            const singleColor = colors[Math.floor(colors.length / 2)];
-            if (map.getLayer('geo-fill-layer')) {
-                map.setPaintProperty('geo-fill-layer', 'fill-color', singleColor);
-                map.setPaintProperty('geo-fill-layer', 'fill-outline-color', 'rgba(0,0,0,0.05)');
+            baseColorExpression = colors[Math.floor(colors.length / 2)];
+        } else {
+            const stepCount = colors.length;
+            const stepSize = (max - min) / stepCount;
+            baseColorExpression = ['step', ['get', activeField]];
+            baseColorExpression.push(colors[0]);
+            for (let i = 1; i < stepCount; i++) {
+                const stopValue = min + (stepSize * i);
+                baseColorExpression.push(stopValue);
+                baseColorExpression.push(colors[i]);
             }
-            if (map.getLayer('geo-linestring-main')) map.setPaintProperty('geo-linestring-main', 'line-color', singleColor);
-            if (map.getLayer('geo-point-layer')) map.setPaintProperty('geo-point-layer', 'circle-color', singleColor);
-            return; 
         }
 
-        // ✅ [核心修改] 使用 'step' (阶梯) 表达式代替 'interpolate' (线性)
-        // Step 能让颜色分层更明显，哪怕数值差异很小，也会被强制划分到不同的颜色块中
+        // 🌟🌟 5. [核心修改] 构建“是否勾选”的判断逻辑 🌟🌟
+        // 如果用户把下拉框清空了，为了防止底层引擎报错，给一个绝对匹配不到的值
+        const safeFilterValues = activeFilterValues.length > 0 ? activeFilterValues : ['__NOTHING_SELECTED__'];
         
-        const stepCount = colors.length;
-        const stepSize = (max - min) / stepCount;
+        // isMatched 是一个布尔运算：当前要素的值，是否在安全数组内
+        const isMatched: any = ['in', ['get', activeField], ['literal', safeFilterValues]];
 
-        // 构造 step 表达式: ['step', ['get', field], color0, stop1, color1, stop2, color2 ...]
-        // 意思是：小于 stop1 用 color0，小于 stop2 用 color1 ... 以此类推
-        const expression: any[] = ['step', ['get', activeField]];
+        // 利用 ['case', 条件, 满足时的值, 不满足时的值] 动态分配属性
         
-        // 初始颜色 (小于第一个断点的值用这个颜色)
-        expression.push(colors[0]);
+        // 🚀 修改点：Color 统一直接使用 baseColorExpression，保留原色
+        
+        // 面 (Polygon) 属性
+        const finalFillColor = baseColorExpression;                                 // 无论是否勾选，都保留原色
+        const finalFillOpacity = ['case', isMatched, 0.85, 0.15];                   // 未勾选透明度降到 15%
+        const outlineColor = isGridMode ? 'rgba(0,0,0,0)' : 'rgba(0,0,0,0.05)';
+        const finalFillOutline = ['case', isMatched, outlineColor, 'rgba(0,0,0,0)'];// 未勾选去边框
 
-        for (let i = 1; i < stepCount; i++) {
-            const stopValue = min + (stepSize * i);
-            expression.push(stopValue); // 断点
-            expression.push(colors[i]); // 该区间颜色
-        }
+        // 线 (LineString) 属性
+        const finalLineColor = baseColorExpression;                                 // 保留原色
+        const finalLineOpacity = ['case', isMatched, 0.8, 0.15];                    // 未勾选变透明
+        const finalLineWidth = ['case', isMatched, 3, 1];                           // 未勾选变极细
 
-        console.log(`🎨 颜色分层更新: Field=${activeField}, Mode=Step, Range=[${min}, ${max}]`);
+        // 点 (Point) 属性
+        const finalPointColor = baseColorExpression;                                // 保留原色
+        const finalPointOpacity = ['case', isMatched, 1.0, 0.2];                    // 🌟 给 20% 的透明度，确保能看清原本的颜色，但又很暗淡
+        const finalPointRadius = ['case', isMatched, 6, 2];                         // 🌟 未勾选缩小到 2px
+        const finalPointStrokeWidth = ['case', isMatched, 1, 0];                    // 未勾选无描边
+        const finalPointStrokeColor = ['case', isMatched, 'rgba(255,255,255,0.3)', 'rgba(0,0,0,0)'];
 
-        // 5. 应用到地图
+        // 6. 应用到地图
         if (map.getLayer('geo-fill-layer')) {
-            map.setPaintProperty('geo-fill-layer', 'fill-color', expression);
-            map.setPaintProperty('geo-fill-layer', 'fill-opacity', 0.85); 
-            
-            // ✅ [修改] 动态设置描边：网格模式下强制透明，普通模式下给一点点描边
-            const outlineColor = isGridMode ? 'rgba(0,0,0,0)' : 'rgba(0,0,0,0.05)';
-            map.setPaintProperty('geo-fill-layer', 'fill-outline-color', outlineColor);
+            map.setPaintProperty('geo-fill-layer', 'fill-color', finalFillColor);
+            map.setPaintProperty('geo-fill-layer', 'fill-opacity', finalFillOpacity); 
+            map.setPaintProperty('geo-fill-layer', 'fill-outline-color', finalFillOutline);
         }
         
-        // 线数据：也使用分段颜色
         if (map.getLayer('geo-linestring-main')) {
-            map.setPaintProperty('geo-linestring-main', 'line-color', expression);
+            map.setPaintProperty('geo-linestring-main', 'line-color', finalLineColor);
+            map.setPaintProperty('geo-linestring-main', 'line-opacity', finalLineOpacity);
+            map.setPaintProperty('geo-linestring-main', 'line-width', finalLineWidth);
         }
         
-        // 点数据：也使用分段颜色
         if (map.getLayer('geo-point-layer')) {
-            map.setPaintProperty('geo-point-layer', 'circle-color', expression);
+            map.setPaintProperty('geo-point-layer', 'circle-color', finalPointColor);
+            map.setPaintProperty('geo-point-layer', 'circle-opacity', finalPointOpacity);
+            map.setPaintProperty('geo-point-layer', 'circle-radius', finalPointRadius);
+            map.setPaintProperty('geo-point-layer', 'circle-stroke-width', finalPointStrokeWidth);
+            map.setPaintProperty('geo-point-layer', 'circle-stroke-color', finalPointStrokeColor);
         }
     };
 
@@ -911,7 +1013,7 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
         if (isMapLoaded && data) {
             updateChoroplethColors();
         }
-    }, [activeField, activeScheme, isMapLoaded]);
+    }, [activeField, activeScheme, activeFilterValues, isMapLoaded]);
     
     // 用来记录上一次的底图，初始化为当前的 activeBasemap
     const prevBasemapRef = useRef(activeBasemap);
@@ -1399,6 +1501,30 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                                                 </Option>
                                             ))}
                                         </Select>
+                                    </div>
+                                </Tooltip>
+                            </>
+                        )}
+
+                        {/* 👇 👇 👇 [新增] 值过滤模块 👇 👇 👇 */}
+                        {activeField && activeField !== 'none' && !isGridMode && (
+                            <>
+                                <div className="w-px h-5 bg-gray-600 mx-1" />
+                                <Tooltip title="值过滤 (取消勾选可隐藏对应数据)">
+                                    <div className="flex items-center px-2 animate-slide-in-left">
+                                        <FilterOutlined className="text-orange-400 mr-2 text-lg" />
+                                        <Select
+                                            mode="multiple"
+                                            variant="borderless"
+                                            placeholder="筛选数据..."
+                                            value={activeFilterValues}
+                                            onChange={(val) => setActiveFilterValues(val)}
+                                            allowClear
+                                            maxTagCount={1} // 限制标签显示数量，防止选项过多撑爆工具栏
+                                            className="min-w-28 max-w-44 text-gray-200 custom-multi-select"
+                                            options={uniqueFieldValues.map(v => ({ label: String(v), value: v }))}
+                                            styles={{ popup: { root: { border: '1px solid #334155', borderRadius: '8px' } } }}
+                                        />
                                     </div>
                                 </Tooltip>
                             </>

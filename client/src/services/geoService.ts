@@ -309,6 +309,15 @@ class GeoService {
     return res.data;
   }
 
+  // 重命名列名
+  async renameColumn(fileId: string, oldName: string, newName: string): Promise<any> {
+    const response = await apiClient.put(`/files/${fileId}/columns/rename`, {
+        oldName,
+        newName
+    });
+    return response.data;
+  }
+
   /**
    * 导出文件
    * @param fileId 文件ID

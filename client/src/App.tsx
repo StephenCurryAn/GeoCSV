@@ -301,6 +301,50 @@ function App() {
         }
     };
 
+    // 重命名列名
+    const handleRenameColumn = async (oldName: string, newName: string) => {
+        // 假设你有 fileId，如果没有，需要从当前的选中文件状态中获取
+        if (!activeFileId) {
+            message.error("未选中文件");
+            return;
+        }
+
+        try {
+            message.loading({ content: '正在修改列名...', key: 'renameMsg' });
+
+            // 发送请求给后端持久化保存 (稍后在 geoService 中实现)
+            await geoService.renameColumn(activeFileId, oldName, newName);
+            
+            // 🌟 本地乐观更新 (Optimistic UI update)
+            // 不需要重新请求整个文件，直接修改前端内存里的数据，让表格瞬间刷新
+            if (currentData && currentData.features) {
+                const updatedFeatures = currentData.features.map((feature: any) => {
+                    const properties = { ...feature.properties };
+                    // 如果这个要素有旧字段，就把值赋给新字段，并删掉旧字段
+                    if (oldName in properties) {
+                        properties[newName] = properties[oldName];
+                        delete properties[oldName];
+                    }
+                    return { ...feature, properties };
+                });
+                
+                // 更新你的本地状态（假设你的 set 状态方法叫 setCurrentData）
+                setUploadedFilesData((prevData: any) => ({
+                    ...prevData, // 保留其他文件的完全不变
+                    [activeFileName]: { 
+                        ...prevData[activeFileName], // 保留当前文件的其他属性（如 type="FeatureCollection" 等）
+                        features: updatedFeatures    // 替换更新后的 features 数组
+                    }
+                }));
+            }
+
+            message.success({ content: `列名 [${oldName}] 已修改为 [${newName}]`, key: 'renameMsg' });
+        } catch (error: any) {
+            console.error(error);
+            message.error({ content: error.message || '修改列名失败', key: 'renameMsg' });
+        }
+    };
+
   return (
     <MainLayout>
       {/* 第 1 个子元素：左侧 */}
@@ -333,7 +377,7 @@ function App() {
             onDeleteRow={handleDeleteRow}
             onAddColumn={handleAddColumn}
             onDeleteColumn={handleDeleteColumn}
-            
+            onRenameColumn={handleRenameColumn}
         />
       </SplitTablePanel>
 

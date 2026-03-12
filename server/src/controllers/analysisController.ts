@@ -819,6 +819,7 @@ export const executeTableFormula = async (req: Request, res: Response) => {
                 reqParams[paramName] = arg.slice(1, -1);
             } else {
                 reqColumns.push(arg);
+                reqParams[paramName] = arg;       // 🌟 2. 【新增这一行】：绑定参数键值对！
             }
         });
     }
@@ -828,7 +829,7 @@ export const executeTableFormula = async (req: Request, res: Response) => {
     // ==========================================
     // 🌟 终极瘦身：彻底斩断 Node.js 的数据搬运！
     // ==========================================
-    
+
     // 🌟 新增：合并前端传来的列（reqColumns）与模型注册时 AI 提取的必填列（requiredColumns）
     // 用 Set 去重，防止同一个列名传两遍
     const finalColumns = Array.from(new Set([

@@ -37,6 +37,8 @@ interface DataPivotProps {
     onDeleteRow?: (recordId: string | number) => void;
     onAddColumn?: () => void;
     onDeleteColumn?: (fieldName: string) => void;
+    // ✅ 新增：重命名列回调
+    onRenameColumn?: (oldFieldName: string, newFieldName: string) => void;
 }
 
 // ==========================================
@@ -270,7 +272,7 @@ const FormulaCellEditor = (props: any) => {
 
 const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, pagination, onPageChange, 
     onRowClick, selectedFeature, onDataChange, 
-    onAddRow, onDeleteRow, onAddColumn, onDeleteColumn }) => {
+    onAddRow, onDeleteRow, onAddColumn, onDeleteColumn, onRenameColumn }) => {
     // ✅ 修改 2: 获取上下文感知的 message 实例
     // 注意：MapView 必须被包裹在 <App> 组件中（通常在 main.tsx 或 App.tsx 已经包了）
     const { message } = App.useApp();
@@ -589,9 +591,49 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
         </Space>
         </div>
 
-        <div className="ag-theme-alpine-dark flex-1 w-full h-full">
+        <div 
+            className="ag-theme-alpine-dark flex-1 w-full h-full"
+            onDoubleClick={(e) => {
+                // 1. 获取当前双击的 DOM 元素
+                const target = e.target as HTMLElement;
+
+                // 2. 只有双击在表头文字区域（.ag-header-cell-label）才触发，避免双击调整列宽（.ag-header-cell-resize）时误触
+                const headerLabel = target.closest('.ag-header-cell-label');
+                if (headerLabel) {
+                    // 3. 向上找到表头单元格容器，获取列名 (col-id 默认就是 field)
+                    const headerCell = target.closest('.ag-header-cell');
+                    const colId = headerCell?.getAttribute('col-id');
+
+                    // 过滤掉空白公式列和空值
+                    if (!colId || colId.startsWith('__empty_col_')) return;
+
+                    // 4. 系统核心字段保护
+                    const readOnlyFields = ['id', '_geometry', 'cp', '_cp', '_lng', '_lat', '_geom_coords', 'name'];
+                    if (readOnlyFields.includes(colId)) {
+                        message.warning(`[${colId}] 是系统保留字段，禁止修改！`);
+                        return;
+                    }
+
+                    // 5. 弹窗询问新列名（输入框默认填入原列名）
+                    const newCol = prompt(`修改列名 [${colId}] 为：`, colId);
+                    
+                    // 6. 校验输入并触发回调
+                    if (newCol && newCol.trim() !== '' && newCol.trim() !== colId && onRenameColumn) {
+                        onRenameColumn(colId, newCol.trim());
+                    }
+                }
+            }}
+        >
         {/* 注入炫酷的选中样式 */}
         <style>{`
+            .ag-header-cell-label {
+                font-weight: 600;
+                cursor: pointer;
+                transition: color 0.2s;
+            }
+            .ag-header-cell-label:hover {
+                color: #00e5ff !important; /* 悬浮时变青色，提示可操作 */
+            }
             .ag-theme-alpine-dark {
                 --ag-background-color: #111827; 
                 --ag-header-background-color: #1f2937; 
