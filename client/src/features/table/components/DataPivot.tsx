@@ -792,47 +792,67 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
                                 rawArgs: processedArgs 
                             });
 
-                            const { resultColName, resultData } = responseData;
+                            const resultData = responseData.resultData;
+                            
+                            // 兼容旧版接口(resultColName) 和 新版多列接口(resultColNames)
+                            const rawCols = responseData.resultColNames || responseData.resultColName;
+                            
+                            // 不管后端传过来的是字符串还是数组，我们统一包成数组
+                            const finalColNames = Array.isArray(rawCols) 
+                                ? rawCols 
+                                : (typeof rawCols === 'string' ? [rawCols] : []);
 
                             if (!resultData || !Array.isArray(resultData)) {
                                 throw new Error("后端返回的数据结构不正确，缺少 resultData 数组！");
                             }
+                            
+                            if (finalColNames.length === 0) {
+                                throw new Error("后端没有返回有效的列名字段，请检查控制台网络请求！");
+                            }
 
-                            // 转换成字典 Map 加速查询
+                            // 转换成字典 Map (支持多字段与单字段的自适应)
                             const scoreMap = new Map();
                             resultData.forEach((item: any) => {
-                                scoreMap.set(String(item.id), item.score);
+                                // 提取 id，剩余的所有属性作为 scores
+                                const { id, score, ...otherScores } = item;
+                                
+                                // 如果发现后端还在传老的 "score" 字段，主动帮它映射到列名上
+                                if (score !== undefined && typeof rawCols === 'string') {
+                                    scoreMap.set(String(id), { [rawCols]: score, ...otherScores });
+                                } else {
+                                    scoreMap.set(String(id), { score, ...otherScores });
+                                }
                             });
 
-                            // 🌟 第一步：更新表头配置 (React 状态)
+                            // 🌟 第一步：动态批量追加表头配置
                             setColumnDefs(prev => {
-                                if (prev.some(col => col.field === resultColName)) return prev;
-                                return [
-                                    ...prev,
-                                    { 
-                                        field: resultColName, 
-                                        headerName: resultColName, 
-                                        sortable: true, filter: true, resizable: true, editable: true, minWidth: 100, width: 150 
+                                const newCols = [...prev];
+                                finalColNames.forEach((colName: string) => {
+                                    if (!newCols.some(col => col.field === colName)) {
+                                        newCols.push({ 
+                                            field: colName, 
+                                            headerName: colName, 
+                                            sortable: true, filter: true, resizable: true, editable: true, minWidth: 100, width: 150 
+                                        });
                                     }
-                                ];
+                                });
+                                return newCols;
                             });
 
-                            // 🌟 第二步：纯 React 状态重绘行数据 (放弃 applyTransaction)
-                            // 在 React 18 中，这行代码会和上面的 setColumnDefs 被“自动批处理(Batched)”为同一次渲染
-                            // 表头和数据会同时完美地呈现在界面上！
+                            // 🌟 第二步：纯 React 状态重绘行数据 
                             setRowData(prev => {
                                 return prev.map(row => {
-                                    const matchScore = scoreMap.get(String(row.id));
-                                    // 如果这行在后端返回的结果里有算好的分数，就把新列和分数塞进这个对象
-                                    if (matchScore !== undefined) {
-                                        return { ...row, [resultColName]: matchScore };
+                                    const matchScores = scoreMap.get(String(row.id));
+                                    if (matchScores !== undefined) {
+                                        return { ...row, ...matchScores }; 
                                     }
                                     return row;
                                 });
                             });
 
                             node.setDataValue(field!, "✅ 公式完成");
-                            message.success(`模型计算成功！新增列 [${resultColName}] 已渲染`);
+                            // 这里使用 finalColNames.join 就绝对不会报错了
+                            message.success(`模型计算成功！新增列 [${finalColNames.join(', ')}] 已渲染`);
 
                         } catch (error: any) {
                             console.error("公式计算失败", error);

@@ -26,7 +26,7 @@ import {
 } from '@ant-design/icons';
 import { useAnalysisStore } from '../../../stores/useAnalysisStore'
 
-const { Option } = Select;
+const { Option, OptGroup } = Select;
 
 interface MapViewProps {
     data: any;        // GeoJSON 数据
@@ -74,6 +74,21 @@ const COLOR_SCHEMES = {
         name: '科技青 (Default)', 
         colors: ['#e0f7fa', '#b2ebf2', '#80deea', '#4dd0e1', '#26c6da', '#00bcd4', '#00acc1', '#0097a7', '#00838f', '#006064'] 
     },
+    categorical: {
+        name: '离散型',
+        // 经典的 D3/Tableau 风格高对比度颜色，色相差异极大，绝不混淆
+        colors: ['#e6194B', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#42d4f4', '#f032e6', '#bfef45', '#fabed4']
+    },
+    pastel: {
+        name: '离散型（低饱和）',
+        // 柔和、低饱和度的多色彩系，非常适合做大面积多边形(Polygon)填充，不会刺眼
+        colors: ['#ffb3ba', '#ffdfba', '#ffffba', '#baffc9', '#bae1ff', '#e0bbe4', '#957dad', '#d291bc', '#fec8d8', '#ffdfd3']
+    },
+    cyberpunk: {
+        name: '离散型（高饱和）',
+        // 配合你的暗色底图，极高饱和度、发光质感的霓虹色
+        colors: ['#ff00ff', '#00ffff', '#00ff00', '#ffff00', '#ff0000', '#0000ff', '#ff8800', '#ff0088', '#88ff00', '#8800ff']
+    }
 };
 
 // ✅ [新增] 颜色插值辅助函数 (Hex -> RGB -> Interpolate -> Hex)
@@ -906,35 +921,61 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
         const scheme = COLOR_SCHEMES[activeScheme] || COLOR_SCHEMES.default;
         const colors = scheme.colors;
 
-        // 3. 计算极值 (Min/Max)
-        let min = Infinity;
-        let max = -Infinity;
-        currentDisplayData.features.forEach((f: any) => {
-            const val = f.properties[activeField];
-            if (typeof val === 'number') {
-                if (val < min) min = val;
-                if (val > max) max = val;
-            }
-        });
-
-        if (min === Infinity || max === -Infinity) return; // 没数据
-        
-        // 4. 构建基础颜色表达式 (Base Expression)
         let baseColorExpression: any;
-        if (min === max) {
-            baseColorExpression = colors[Math.floor(colors.length / 2)];
-        } else {
-            const stepCount = colors.length;
-            const stepSize = (max - min) / stepCount;
-            baseColorExpression = ['step', ['get', activeField]];
-            baseColorExpression.push(colors[0]);
-            for (let i = 1; i < stepCount; i++) {
-                const stopValue = min + (stepSize * i);
-                baseColorExpression.push(stopValue);
-                baseColorExpression.push(colors[i]);
-            }
-        }
 
+        // 判断当前选中的是文本字段还是数值字段
+        const isStringField = stringFields.includes(activeField);
+
+        if (isStringField) {
+            // ==========================================
+            // 🌟 文本字段：分类唯一值渲染 (Categorical Match)
+            // ==========================================
+            baseColorExpression = ['match', ['get', activeField]];
+            
+            // uniqueFieldValues 在前面的 useEffect 中已经提取好了（去重+排序过的数据）
+            if (uniqueFieldValues.length > 0) {
+                uniqueFieldValues.forEach((val, index) => {
+                    // 循环利用调色板中的颜色，保证同一类型颜色固定
+                    const colorIndex = index % colors.length;
+                    baseColorExpression.push(val);
+                    baseColorExpression.push(colors[colorIndex]);
+                });
+            } else {
+                baseColorExpression.push('__dummy__', colors[0]); // 防呆兜底
+            }
+            
+            // Mapbox 要求 match 必须有一个默认 Fallback 颜色
+            baseColorExpression.push('#808080'); 
+
+        } else {
+                // 3. 计算极值 (Min/Max)
+                let min = Infinity;
+                let max = -Infinity;
+                currentDisplayData.features.forEach((f: any) => {
+                    const val = f.properties[activeField];
+                    if (typeof val === 'number') {
+                        if (val < min) min = val;
+                        if (val > max) max = val;
+                    }
+                });
+
+                if (min === Infinity || max === -Infinity) return; // 没数据
+                
+                // 4. 构建基础颜色表达式 (Base Expression)
+                if (min === max) {
+                    baseColorExpression = colors[Math.floor(colors.length / 2)];
+                } else {
+                    const stepCount = colors.length;
+                    const stepSize = (max - min) / stepCount;
+                    baseColorExpression = ['step', ['get', activeField]];
+                    baseColorExpression.push(colors[0]);
+                    for (let i = 1; i < stepCount; i++) {
+                        const stopValue = min + (stepSize * i);
+                        baseColorExpression.push(stopValue);
+                        baseColorExpression.push(colors[i]);
+                    }
+                }
+        }
         // 🌟🌟 5. [核心修改] 构建“是否勾选”的判断逻辑 🌟🌟
         // 如果用户把下拉框清空了，为了防止底层引擎报错，给一个绝对匹配不到的值
         const safeFilterValues = activeFilterValues.length > 0 ? activeFilterValues : ['__NOTHING_SELECTED__'];
@@ -1458,14 +1499,30 @@ const MapView: React.FC<MapViewProps> = ({ data, fileName, fileId, selectedFeatu
                                     onChange={setActiveField}
                                     allowClear={!isGridMode}
                                     // ✅ [修改] 禁用逻辑
-                                    disabled={isGridMode || numericFields.length === 0} 
+                                    disabled={isGridMode || (numericFields.length === 0 && stringFields.length === 0)} 
                                     className="min-w-25 max-w-35 text-gray-200"
                                     styles={{ popup: { root: { border: '1px solid #334155', borderRadius: '8px' } } }}
                                 >
                                     <Option value="none">-- 默认纯色 --</Option>
-                                    {numericFields.map(field => (
-                                        <Option key={field} value={field}>{field}</Option>
-                                    ))}
+
+                                    {/* ✅ [修改 2] 分组渲染数值字段 */}
+                                    {numericFields.length > 0 && (
+                                        <OptGroup label="数值字段 (渐变映射)">
+                                            {numericFields.map(field => (
+                                                <Option key={field} value={field}>{field}</Option>
+                                            ))}
+                                        </OptGroup>
+                                    )}
+                                    
+                                    {/* ✅ [修改 3] 分组渲染文本字段 */}
+                                    {stringFields.length > 0 && (
+                                        <OptGroup label="文本字段 (分类映射)">
+                                            {stringFields.map(field => (
+                                                <Option key={field} value={field}>{field}</Option>
+                                            ))}
+                                        </OptGroup>
+                                    )}
+
                                     {/* 网格模式下可能包含 value 字段 */}
                                     {isGridMode && <Option value="value">聚合值 (Value)</Option>}
                                 </Select>

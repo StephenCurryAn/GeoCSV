@@ -13,8 +13,8 @@ const PYTHON_API_URL = 'http://127.0.0.1:8000/api';
 // 更新后的 Python API 返回结构 (API 契约)
 interface PythonApiResponse {
   status: string;
-  result_col_name: string;
-  result_data: Array<{ id: string; score: number }>; // 明确告诉 TS 这是一个包含 id 和 score 的对象数组
+  result_col_names: string[];
+  result_data: Array<any>; // 明确告诉 TS 这是一个包含 id 和 score 的对象数组
   execution_time_ms: number;
 }
 
@@ -787,7 +787,7 @@ export const registerModelByAI = async (req: Request, res: Response) => {
 };
 
 // ==========================================
-// 2. 核心数据透视接口 (高速调度网关 BFF)
+// 2. 核心模型函数计算 (高速调度网关 BFF)
 // ==========================================
 export const executeTableFormula = async (req: Request, res: Response) => {
   try {
@@ -850,14 +850,14 @@ export const executeTableFormula = async (req: Request, res: Response) => {
     // ==========================================
     // 此时 Python 已经在底层完成了“拉取 -> 计算 -> MongoDB 回写”的闭环！
     // Node.js 只需要拿到轻量级的绘图数据返回给前端即可。
-    const { result_col_name, result_data, execution_time_ms } = response.data;
+    const { result_col_names, result_data, execution_time_ms } = response.data;
 
-    console.log(`[BFF调度层] 底层引擎计算并落盘完毕，总耗时 ${execution_time_ms.toFixed(2)}ms`);
+    console.log(`[BFF调度层] 底层引擎计算并落盘完毕，新增 ${result_col_names.length} 列，总耗时 ${execution_time_ms.toFixed(2)}ms`);
 
     // 直接返回给前端更新 UI
     res.json({ 
         code: 200, 
-        resultColName: result_col_name, 
+        resultColName: result_col_names, 
         resultData: result_data 
     });
 

@@ -34,7 +34,7 @@ class ModelInput(BaseModel):
 MODEL_REGISTRY = {}
 
 # ==========================================
-# 🌟 核心修复 2：工业级的模型热发现与重载机制
+# 模型热发现与重载机制
 # ==========================================
 def auto_discover_models():
     global MODEL_REGISTRY
@@ -95,7 +95,7 @@ async def execute_model(payload: ModelInput):
                 raise HTTPException(status_code=404, detail=f"模型 {payload.model_name} 在物理硬盘上也不存在，请先使用 AI 生成。")
 
         # ==========================================
-        # 🌟 第一步核弹级优化：Data Locality (数据本地化直连)
+        # Data Locality (数据本地化直连)
         # ==========================================
         print(f"\n[*] 正在从 MongoDB 拉取数据: fileId={payload.file_id}")
         
@@ -141,34 +141,51 @@ async def execute_model(payload: ModelInput):
         # 执行模型核心逻辑
         print(f"[*] 开始执行空间分析: {model_key}")
         target_func = MODEL_REGISTRY[model_key]
-        raw_result = target_func(df, payload.parameters)
+        raw_result_dict = target_func(df, payload.parameters)
 
         # ==========================================
-        # 🌟 第二步核弹级优化：Python 原地异步写回数据库
+        # Python 原地异步写回数据库(支持多列)
         # ==========================================
         print("[*] 计算完成，正在打包回写 MongoDB...")
-        if hasattr(raw_result, 'tolist'):
-            raw_result = raw_result.tolist()
-            
-        result_col_name = f"{model_key}_Score"
+
+        result_col_names = list(raw_result_dict.keys())
         bulk_ops = []
-        result_data = [] # 这是一个只包含 id 和 score 的极小数组，专门回传给 Node.js 给前端画图用
+        result_data = [] # 扁平化数据： [{"id": "xxx", "col1": 1, "col2": 2}]
         
+        # 预处理：把可能的 numpy array 全部转成 list
+        for col_name, col_data in raw_result_dict.items():
+            if hasattr(col_data, 'tolist'):
+                raw_result_dict[col_name] = col_data.tolist()
+                
+        # 逐行构造多字段更新指令
         for index, row in df.iterrows():
-            x = raw_result[index]
-            score = 0.0 if pd.isna(x) else float(x)
-            
             doc_id = row['_id']
             row_id = row.get('id', str(doc_id))
             
-            # 记录精简结果 (几十KB，随便传)
-            result_data.append({"id": row_id, "score": score})
+            update_fields = {}
+            row_scores = {"id": row_id}
             
-            # 构造 MongoDB 更新指令
+            # 遍历这行数据的所有新增列
+            for col_name in result_col_names:
+                x = raw_result_dict[col_name][index]
+                # 安全的数值转换 (处理 numpy 的 float64 和 pandas 的 NaT/NaN)
+                if pd.isna(x):
+                    score = None
+                elif hasattr(x, 'item'):
+                    score = x.item()
+                else:
+                    score = x
+                    
+                update_fields[f"properties.{col_name}"] = score
+                row_scores[col_name] = score
+                
+            result_data.append(row_scores)
+            
+            # 构造 MongoDB 更新指令（一次性 $set 多个属性）
             bulk_ops.append(
                 UpdateOne(
                     {"_id": doc_id},
-                    {"$set": {f"properties.{result_col_name}": score}}
+                    {"$set": update_fields}
                 )
             )
         
@@ -176,15 +193,16 @@ async def execute_model(payload: ModelInput):
         if bulk_ops:
             db.features.bulk_write(bulk_ops)
         
-        print(f"[*] 成功更新了 {len(bulk_ops)} 条要素属性！")
+        print(f"[*] 成功更新了 {len(bulk_ops)} 条要素的 {len(result_col_names)} 个属性！")
 
-        # 将轻量级结果回传给 Node 网关
+        # 将多列的轻量级结果回传给 Node 网关
         return {
             "status": "success",
-            "result_col_name": result_col_name,
-            "result_data": result_data, 
+            "result_col_names": result_col_names, # ✅ 返回列名数组
+            "result_data": result_data,           # ✅ 返回多字段数据包
             "execution_time_ms": (time.time() - start_time) * 1000
         }
+
     except Exception as e:
         print(f"\n{'='*50}")
         print(f"❌ 算子执行崩溃: {payload.model_name}")
