@@ -7,6 +7,8 @@ import * as turf from '@turf/turf';
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
+// 引入容器化模型执行逻辑
+import { executeContainerModelLogic } from './modelExecutionController';
 
 // WSL2 中 FastAPI 运行的地址
 const PYTHON_API_URL = 'http://127.0.0.1:8000/api';
@@ -771,6 +773,7 @@ export const registerModelByAI = async (req: Request, res: Response) => {
         displayName, 
         description, 
         parameters, 
+        type: 'function',
         status: 'active' 
       },
       { upsert: true, new: true } // 如果存在则更新，不存在则创建
@@ -804,7 +807,7 @@ export const executeTableFormula = async (req: Request, res: Response) => {
         modelDef = { parameters: [] } as any; 
     }
 
-    // 🌟 核心突破：动态参数分类与路由 (保持原有优秀逻辑)
+    // 动态参数分类与路由 (无论是列名、图层名还是全局参数(标量)，都在这里被统一分类)
     if (rawArgs && Array.isArray(rawArgs)) {
         reqColumns = [];
         reqParams = {};
@@ -819,9 +822,16 @@ export const executeTableFormula = async (req: Request, res: Response) => {
                 reqParams[paramName] = arg.slice(1, -1);
             } else {
                 reqColumns.push(arg);
-                reqParams[paramName] = arg;       // 🌟 2. 【新增这一行】：绑定参数键值对！
+                reqParams[paramName] = arg;       // 绑定参数键值对！
             }
         });
+    }
+
+    // 智能路由分发 (BFF 核心)
+    if (modelDef && modelDef.type === 'container') {
+        console.log(`[网关调度] 捕获到容器公式调用: ${modelName}，正在路由至 Docker 沙箱引擎...`);
+        // 🌟 核心修改：将解析好的【引用列 reqColumns】和【参数字典 reqParams】全部传给沙箱！
+        return await executeContainerModelLogic(res, modelDef, fileId, reqColumns, reqParams);
     }
 
     console.log(`[BFF调度层] 向底层空间引擎下发计算指令... 文件: ${fileId}, 模型: ${modelName}`);
@@ -908,6 +918,7 @@ export const createModelViaNaturalLanguage = async (req: Request, res: Response)
                 description: description, 
                 parameters: parameters || [], // 🌟 核心：把大模型解析出的参数定义直接存入数据库！
                 requiredColumns: requiredColumns || [], // 🌟 新增：存入必须的列名
+                type: 'function',
                 status: 'active' 
             },
             { upsert: true, new: true }

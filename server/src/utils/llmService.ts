@@ -124,3 +124,76 @@ export const generateModelCodeFromAI = async (userPrompt: string): Promise<AIGen
         throw new Error("AI 智能体未能生成合法的模型代码，请调整指令语后重试。");
     }
 };
+
+// server/src/utils/llmService.ts (追加代码)
+
+/**
+ * 动态行为脚本生成，用于解决前端数据与底层Docker模型契约不匹配时的“异构数据阻抗”
+ */
+export const generateBehaviorScript = async (
+    userFileName: string, 
+    allAvailableColumns: string[], // 🌟 新增：全量列名库
+    reqColumns: string[],          // 🌟 新增：用户在公式里显式引用的无引号列名/图层名
+    reqParams: Record<string, any>,// 🌟 新增：全量参数字典(含标量)
+    targetFormat: string, 
+    nodeDescription: string,
+    expectedSchema?: string[]
+): Promise<string> => {
+    
+    const prompt = `
+你是一个顶尖的 GIS 数据处理专家和 Python 工程师。
+现在有一个 WebGIS 地理分析流水线遇到了“异构数据阻抗”，需要你即时编写适配脚本。
+
+【执行沙箱上下文环境】
+1. 源数据集挂载点: "/data/input/${userFileName}" 
+   （该源数据集包含的所有可用属性列: [${allAvailableColumns.join(', ')}]）
+2. 用户的动态参数字典挂载点: "/data/input/params.json"
+   （内容为: ${JSON.stringify(reqParams)}）
+   （用户在公式中显式引用的列/图层: [${reqColumns.join(', ')}]）
+
+【目标 DOM 节点模型契约】
+- 模型底层期望的输入文件格式: ${targetFormat}
+- 目标输出挂载路径: '/data/output/adapted_data${targetFormat}'
+- 节点业务描述: ${nodeDescription}
+- 预期的列结构规范: ${expectedSchema ? expectedSchema.join(', ') : '无严格规范要求'}
+
+【你的任务与推理逻辑】
+请编写一段纯 Python 脚本完成“阻抗匹配”。你需要根据上述上下文推理用户的真实意图：
+- 如果用户引用的列名存在于“源数据集可用属性列”中，说明用户只想处理这特定的几列数据（行级/列级计算），请在代码中筛选这些列。
+- 如果用户传入的参数是全局标量（如 "50mm/h"）或者全局图层代号，说明用户是在进行全局/空间建模，请读取全量源数据集，并结合 params.json 中的标量参数进行整体重组。
+- 最终，将转换、融合后的结果严格保存到 "/data/output/adapted_data${targetFormat}"。
+- 必须使用 os.makedirs(os.path.dirname(output_path), exist_ok=True) 确保目录存在。
+
+【绝对强制规范】
+1. 只允许输出纯 Python 代码！严禁 Markdown 标记（严禁 \`\`\`python 开头）！
+2. 绝对不要输出任何注释解释你的思考过程！
+3. 代码必须健壮，引入必要的库（如 pandas, geopandas, json），并处理可能的缺失值。
+`;
+
+    try {
+        console.log(`[GeoAI Compiler] 正在为容器模型即时生成智能多粒度行为脚本...`);
+        
+        const response = await openai.chat.completions.create({
+            model: "deepseek-coder", 
+            messages: [
+                { role: "system", content: "你是一个只输出纯粹 Python 脚本的无情编码机器。" },
+                { role: "user", content: prompt }
+            ],
+            temperature: 0.1, 
+            max_tokens: 3000,
+        });
+
+        let pythonCode = response.choices[0].message.content || "";
+        
+        pythonCode = pythonCode.trim();
+        if (pythonCode.startsWith("```python")) pythonCode = pythonCode.replace(/^```python\n?/, "");
+        else if (pythonCode.startsWith("```")) pythonCode = pythonCode.replace(/^```\n?/, "");
+        if (pythonCode.endsWith("```")) pythonCode = pythonCode.replace(/\n?```$/, "");
+
+        return pythonCode.trim();
+
+    } catch (error: any) {
+        console.error("[GeoAI Compiler] 生成行为脚本失败:", error);
+        throw new Error("AI 智能体未能生成适配数据的行为脚本。");
+    }
+};

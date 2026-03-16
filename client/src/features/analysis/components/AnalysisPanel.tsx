@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Select, Button, Form, ConfigProvider, theme, App, Segmented, Tooltip } from 'antd';
+import { Upload, Select, Button, Form, ConfigProvider, theme, App, Segmented, Tooltip } from 'antd';
 import { 
     PlayCircleOutlined, 
     DotChartOutlined, 
@@ -10,6 +10,10 @@ import {
     DeploymentUnitOutlined, // ✅ [新增] 用这个图标代表山脊图/分段
     ThunderboltOutlined,
     BoxPlotOutlined, // ✅ [新增] 引入图标
+    AppstoreAddOutlined, 
+    CloudUploadOutlined,
+    InboxOutlined,
+    PlaySquareOutlined
 } from '@ant-design/icons';
 import { useAnalysisStore } from '../../../stores/useAnalysisStore';
 import apiClient from '../../../services/apiClient';
@@ -39,13 +43,18 @@ const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ fileId, fields }) => {
 
     // 🌟 1. 增加模型列表状态
     const [availableModels, setAvailableModels] = useState<any[]>([]);
+    const [containerModels, setContainerModels] = useState<any[]>([]); // 存放 container 模型
 
     useEffect(() => {
         const fetchModels = async () => {
             try {
                 const res = await apiClient.get('/analysis/models');
                 if (res.data.code === 200) {
-                    setAvailableModels(res.data.data);
+                    // 🌟 核心：在前端分流轻量级和重量级模型
+                    const funcs = res.data.data.filter((m: any) => m.type !== 'container');
+                    const containers = res.data.data.filter((m: any) => m.type === 'container');
+                    setAvailableModels(funcs);
+                    setContainerModels(containers);
                 }
             } catch (error) {
                 console.error('获取可用模型失败:', error);
@@ -63,6 +72,38 @@ const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ fileId, fields }) => {
         
         return () => window.removeEventListener('geoai-model-added', handleModelAdded);
     }, []);
+
+    // 🌟 容器模型 ZIP 上传配置
+    const uploadProps = {
+        name: 'modelZip',
+        // 请确保替换为你真实的后端端口地址
+        action: 'http://localhost:3000/api/analysis/container-models/upload', 
+        accept: '.zip',
+        showUploadList: false,
+        onChange(info: any) {
+            if (info.file.status === 'done') {
+                message.success(`${info.file.name} 契约解析成功，正在后台装配容器...`);
+            } else if (info.file.status === 'error') {
+                message.error(`${info.file.name} 装配失败.`);
+            }
+        },
+    };
+
+    // 🌟 执行容器模型
+    const handleRunContainer = async (modelName: string) => {
+        message.loading({ content: 'AI 正在即时编译适配脚本并拉起沙箱...', key: 'container_run' });
+        try {
+            const res = await apiClient.post('/analysis/container-models/execute', {
+                fileId,
+                modelName
+            });
+            if(res.data.code === 200) {
+                message.success({ content: '容器执行完毕，产物已输出！', key: 'container_run', duration: 3 });
+            }
+        } catch(e) {
+            message.error({ content: '容器执行失败', key: 'container_run' });
+        }
+    }
 
     // --- 1. 透视分析逻辑 ---
     const handlePivotAnalyze = async () => {
@@ -396,6 +437,84 @@ const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ fileId, fields }) => {
                                 </span>
                             </div> */}
 
+                        </div>
+                    </div>
+                </div>
+                
+                {/* =========== 🌟 新增区域 3: 专业模型容器 (DOM 装配) =========== */}
+                <div className="flex flex-col gap-3">
+                    <div className="flex items-center gap-2 px-1 mt-4">
+                        <AppstoreAddOutlined className="text-blue-500" />
+                        <span className="text-xs font-bold text-blue-500/80 tracking-widest uppercase font-mono">
+                            Professional Containers
+                        </span>
+                        <div className="h-px flex-1 bg-linear-to-r from-blue-900/50 to-transparent"></div>
+                    </div>
+
+                    <div className="rounded-xl overflow-hidden border border-blue-800/30 bg-[#0b1121] shadow-lg">
+                        <div className="px-4 py-3 bg-linear-to-r from-blue-950/30 to-transparent border-b border-blue-900/30 flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <div className="p-1.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                                    <CloudUploadOutlined />
+                                </div>
+                                <span className="text-sm font-bold text-gray-200">云原生算法生态库</span>
+                            </div>
+                            
+                            <Upload {...uploadProps}>
+                                <div className="cursor-pointer text-xs flex items-center gap-1 bg-blue-600/20 text-blue-400 px-2 py-1 rounded border border-blue-500/30 hover:bg-blue-500/30 transition-colors">
+                                    <InboxOutlined /> 注入 ZIP 契约
+                                </div>
+                            </Upload>
+                        </div>
+
+                        <div className="p-4 bg-gray-900/20">
+                            {containerModels.length > 0 ? (
+                                <div className="flex flex-col gap-3">
+                                    {containerModels.map(model => (
+                                        <div key={model.modelName} className="p-3 bg-black/40 border border-blue-900/40 rounded-lg relative overflow-hidden group">
+                                            {model.status === 'building' && (
+                                                <div className="absolute top-0 left-0 h-1 bg-blue-500 w-full animate-pulse"></div>
+                                            )}
+                                            
+                                            <div className="flex justify-between items-start">
+                                                <div>
+                                                    <div className="text-sm font-bold text-blue-300">
+                                                        {model.displayName} 
+                                                        {model.status === 'building' && <span className="ml-2 text-[10px] text-yellow-500 bg-yellow-900/30 px-1 py-0.5 rounded">正在装配...</span>}
+                                                    </div>
+                                                    <div className="text-xs text-gray-500 mt-1">{model.description}</div>
+                                                </div>
+                                                {model.status === 'active' && (
+                                                    <Button 
+                                                        size="small" 
+                                                        type="primary" 
+                                                        ghost 
+                                                        icon={<PlaySquareOutlined />} 
+                                                        className="border-blue-500 text-blue-400 hover:bg-blue-900/50 text-[10px]"
+                                                        onClick={() => handleRunContainer(model.modelName)}
+                                                    >
+                                                        Run 沙箱
+                                                    </Button>
+                                                )}
+                                            </div>
+
+                                            {/* 展示解析出的 DOM 结构简要信息 */}
+                                            {model.status === 'active' && model.containerMeta?.domTree && (
+                                                <div className="mt-3 pt-2 border-t border-blue-900/30 flex gap-4 text-[10px] text-gray-400 font-mono">
+                                                    <div>
+                                                        <span className="text-emerald-500 font-bold mr-1">INPUTS:</span> 
+                                                        {model.containerMeta.domTree.inputs?.map((i:any) => `${i.id}(${i.format})`).join(', ')}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="text-center py-6 text-gray-500 text-xs">
+                                    暂无专业模型，点击右上角注入 ZIP 契约包
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>

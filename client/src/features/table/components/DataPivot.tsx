@@ -41,39 +41,42 @@ interface DataPivotProps {
     onRenameColumn?: (oldFieldName: string, newFieldName: string) => void;
 }
 
+// 🌟 新增类型：统一下拉提示的结构
+type SuggestionItem = {
+    type: 'category' | 'model' | 'column';
+    text: string;
+    value?: string;
+    desc?: string;
+};
+
 // ==========================================
 // 🌟 纯净大圆满版：双段式智能公式编辑器 (支持模型+列名双重补全)
 // ==========================================
 const FormulaCellEditor = (props: any) => {
     const [value, setValue] = useState(props.value || '');
-    const [suggestions, setSuggestions] = useState<string[]>([]);
+    const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
     const [focusedIndex, setFocusedIndex] = useState(0);
     const [showDropdown, setShowDropdown] = useState(false);
     const [dropdownRect, setDropdownRect] = useState({ top: 0, left: 0, width: 0 });
     
-    // 🌟 新增状态：记录当前下拉框里显示的是“模型(model)”还是“列名(column)”
-    const [suggestionType, setSuggestionType] = useState<'model' | 'column'>('column');
+    // 🌟 核心状态：记录当前选择的是轻量级还是专业级
+    const [selectedCategory, setSelectedCategory] = useState<'function' | 'container' | null>(null);
 
     const inputRef = useRef<HTMLInputElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const listRef = useRef<HTMLUListElement>(null);
 
-    // 1. 获取当前表格所有的列名
     const availableColumns = props.api?.getColumnDefs()
         ?.map((col: any) => col.field)
         .filter((k: string) => k && !k.startsWith('_') && k !== 'id' && k !== 'cp' && !k.startsWith('__empty')) || [];
 
-    // 🌟 核心修复 1：将 availableModels 改为 State，并使用外部传入的值作为初始缓存，彻底删除硬编码兜底！
-    const [availableModels, setAvailableModels] = useState<string[]>(props.availableModels || []);
+    // 注意：这里拿到的 availableModels 是包含 {modelName, type, description} 的完整对象数组
+    const [availableModels, setAvailableModels] = useState<any[]>(props.availableModels || []);
 
-    // 🌟 核心修复 2：【JIT 实时刷新机制】
-    // 每次双击单元格进入编辑状态时，静默向后端拉取一次最新模型列表！
-    // 这样不用刷新网页，AI 刚生成的模型立刻出现，删掉的模型立刻消失！
     useEffect(() => {
         apiClient.get('/analysis/models').then(res => {
             if (res && res.data.code === 200 && Array.isArray(res.data.data)) {
-                // 拿到数据库里最新活跃的模型
-                setAvailableModels(res.data.data.map((m: any) => m.modelName));
+                setAvailableModels(res.data.data); // 存入完整对象
             }
         }).catch(e => console.error("静默刷新实时模型列表失败", e));
     }, []);
@@ -95,7 +98,7 @@ const FormulaCellEditor = (props: any) => {
             setDropdownRect({
                 top: rect.bottom + 4,
                 left: rect.left,
-                width: Math.max(rect.width, 260)
+                width: Math.max(rect.width, 320) // 稍微加宽以显示描述
             });
         }
     };
@@ -126,11 +129,20 @@ const FormulaCellEditor = (props: any) => {
         return { word: text.slice(start, cursorPosition), start, end: cursorPosition };
     };
 
-    // 🌟 核心升级：智能判断当前该提示什么
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // 🌟 核心升级：三级智能分发路由
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement> | any) => {
         const val = e.target.value;
-        setValue(val);
         
+        // 🌟 核心修复：用局部变量追踪最新类别，破解 React 异步 setState 带来的闭包陷阱
+        let nextCategory = selectedCategory;
+
+        // 🌟 交互优化：如果用户清空了输入框(val==='')，或者退格删到了只剩 "="，立刻彻底重置类别
+        if (val === '' || (val === '=' && value.length > 1)) {
+            setSelectedCategory(null);
+            nextCategory = null; // 同步更新局部变量
+        }
+
+        setValue(val);
         if (props.onValueChange) props.onValueChange(val);
 
         const cursor = e.target.selectionStart || 0;
@@ -139,22 +151,41 @@ const FormulaCellEditor = (props: any) => {
             const hasParen = val.includes('(');
 
             if (!hasParen) {
-                // 🚀 模式 1：正在输入模型名称 (刚打了 '='，还没打 '(' )
-                const typedModel = val.slice(1).toUpperCase(); // 提取 = 后面的文字
-                const matchedModels = availableModels.filter((m: string) => m.toUpperCase().includes(typedModel));
-                setSuggestions(matchedModels);
-                setShowDropdown(matchedModels.length > 0);
-                setFocusedIndex(0);
-                setSuggestionType('model'); // 标记为模型提示模式
+                const typedModel = val.slice(1).toUpperCase(); 
+
+                // 🚀 第一级：使用 nextCategory 而不是 selectedCategory 进行判断，保证零延迟响应
+                if (typedModel === '' && !nextCategory) {
+                    setSuggestions([
+                        { type: 'category', text: '⚡ 轻量级计算 (属性运算)', value: 'function', desc: '秒级响应，基于表格现有列进行数学或规则处理' },
+                        { type: 'category', text: '🚀 专业级沙箱 (空间建模)', value: 'container', desc: '云原生计算，挂载全量空间图层与全局配置推演' }
+                    ]);
+                    setShowDropdown(true);
+                    setFocusedIndex(0);
+                } 
+                // 🚀 第二级：已选类别，或者正在打字搜索模型
+                else {
+                    let filtered = availableModels;
+                    // 使用 nextCategory 进行强过滤
+                    if (nextCategory) filtered = filtered.filter(m => m.type === nextCategory);
+                    if (typedModel) filtered = filtered.filter(m => m.modelName.toUpperCase().includes(typedModel));
+
+                    setSuggestions(filtered.map(m => ({
+                        type: 'model',
+                        text: m.modelName,
+                        value: m.type,
+                        desc: m.displayName || m.description || '无描述'
+                    })));
+                    setShowDropdown(filtered.length > 0);
+                    setFocusedIndex(0);
+                }
             } else {
-                // 🚀 模式 2：正在输入参数/列名 (已经打出了 '(' )
+                // 🚀 第三级：输入参数/列名
                 const { word } = getWordContext(val, cursor);
                 if (val[cursor - 1] === '(' || val[cursor - 1] === ',' || val[cursor - 1] === ' ' || word.length > 0) {
                     const matched = availableColumns.filter((c: string) => c.toLowerCase().includes(word.toLowerCase()));
-                    setSuggestions(matched);
+                    setSuggestions(matched.map((c: string) => ({ type: 'column', text: c })));
                     setShowDropdown(matched.length > 0);
                     setFocusedIndex(0);
-                    setSuggestionType('column'); // 标记为列名提示模式
                 } else {
                     setShowDropdown(false);
                 }
@@ -164,36 +195,55 @@ const FormulaCellEditor = (props: any) => {
         }
     };
 
-    // 🌟 核心升级：根据提示类型，执行不同的插入逻辑
-    const insertSuggestion = (suggestion: string) => {
+    const insertSuggestion = (item: SuggestionItem) => {
         let newVal = '';
         let newCursor = 0;
 
-        if (suggestionType === 'model') {
-            // 如果你选的是模型，直接补全模型名并自动加上左括号 "DBSCAN("
-            newVal = '=' + suggestion + '(';
+        if (item.type === 'category') {
+            // 🌟 修复 2：选中类别后，直接在当前计算并替换下拉列表的内容，不再触发 handleChange！
+            const targetCategory = item.value as 'function' | 'container';
+            setSelectedCategory(targetCategory);
+            
+            // 直接过滤出该类别下的模型
+            const filtered = availableModels.filter(m => m.type === targetCategory);
+            
+            // 瞬间替换下拉列表为“模型列表”
+            setSuggestions(filtered.map(m => ({
+                type: 'model',
+                text: m.modelName,
+                value: m.type,
+                desc: m.displayName || m.description || '无描述'
+            })));
+            
+            setFocusedIndex(0);
+            inputRef.current?.focus();
+            
+            // 🌟 必须直接 return！此时输入框依然保持为 "="
+            return; 
+        } 
+        else if (item.type === 'model') {
+            newVal = '=' + item.text + '(';
             newCursor = newVal.length;
-        } else {
-            // 如果你选的是列名，走原来的逻辑插入单词
+            setSelectedCategory(null); // 模型选完后，清理状态
+        } 
+        else if (item.type === 'column') {
             const cursor = inputRef.current?.selectionStart || 0;
             const { start, end } = getWordContext(value, cursor);
-            newVal = value.slice(0, start) + suggestion + value.slice(end);
-            newCursor = start + suggestion.length;
+            newVal = value.slice(0, start) + item.text + value.slice(end);
+            newCursor = start + item.text.length;
         }
 
         setValue(newVal);
         if (props.onValueChange) props.onValueChange(newVal);
         setShowDropdown(false);
         
-        // 恢复焦点并让光标跟在刚插入的词后面
         setTimeout(() => {
             inputRef.current?.setSelectionRange(newCursor, newCursor);
             inputRef.current?.focus();
             
-            // 🌟 极限体验优化：如果你刚补全了模型名并加了 "("，我们主动触发一次事件让它立刻弹出列名提示！
-            if (suggestionType === 'model') {
-                const fakeEvent = { target: { value: newVal, selectionStart: newCursor } } as any;
-                handleChange(fakeEvent);
+            // 补全模型（输入了左括号）后，主动触发一次事件来弹出“列名提示”
+            if (item.type === 'model') {
+                handleChange({ target: { value: newVal, selectionStart: newCursor } } as any);
             }
         }, 10);
     };
@@ -215,9 +265,7 @@ const FormulaCellEditor = (props: any) => {
                     e.stopImmediatePropagation(); setShowDropdown(false);
                 }
             } else {
-                if (['ArrowLeft', 'ArrowRight'].includes(e.key)) {
-                    e.stopImmediatePropagation();
-                }
+                if (['ArrowLeft', 'ArrowRight'].includes(e.key)) e.stopImmediatePropagation();
                 if (e.key === 'Enter') {
                     e.preventDefault();
                     if (stopEditing) stopEditing();
@@ -232,7 +280,7 @@ const FormulaCellEditor = (props: any) => {
     const DropdownPortal = () => {
         if (!showDropdown || suggestions.length === 0) return null;
         return createPortal(
-            <ul ref={listRef} className="ag-custom-component-popup fixed z-999999 bg-[#1a2332] border border-cyan-700/80 rounded-md shadow-[0_10px_40px_rgba(0,0,0,0.8)] max-h-56 overflow-y-auto custom-scrollbar m-0 p-1 list-none overscroll-contain"
+            <ul ref={listRef} className="ag-custom-component-popup fixed z-999999 bg-[#1a2332] border border-cyan-700/80 rounded-lg shadow-[0_15px_50px_rgba(0,0,0,0.9)] max-h-64 overflow-y-auto custom-scrollbar m-0 p-1 list-none overscroll-contain"
                 style={{ top: dropdownRect.top, left: dropdownRect.left, width: dropdownRect.width }}
                 onMouseDown={(e) => {
                     e.stopPropagation(); e.nativeEvent.stopImmediatePropagation();
@@ -245,15 +293,26 @@ const FormulaCellEditor = (props: any) => {
                 onWheel={(e) => { e.stopPropagation(); e.nativeEvent.stopImmediatePropagation(); }}
             >
                 {suggestions.map((s, i) => (
-                    <li key={s} className={`px-3 py-2 cursor-pointer text-sm font-mono transition-all rounded flex items-center ${i === focusedIndex ? 'bg-cyan-600/90 text-white font-bold' : 'text-gray-300 hover:bg-cyan-900/40'}`}
+                    <li key={s.text + i} className={`px-3 py-2 cursor-pointer transition-all rounded flex items-start ${i === focusedIndex ? 'bg-cyan-900/80 shadow-[inset_2px_0_0_#00e5ff]' : 'hover:bg-cyan-900/40'}`}
                         onMouseDown={(e) => { e.preventDefault(); insertSuggestion(s); }}>
-                        {/* 🌟 视觉优化：模型名前面用紫色圆点，列名前面用青色圆点，一眼区分！ */}
-                        <span className={`w-2 h-2 rounded-full mr-2 shrink-0 ${
-                            i === focusedIndex 
-                                ? 'bg-white shadow-[0_0_5px_white]' 
-                                : suggestionType === 'model' ? 'bg-purple-500 opacity-60' : 'bg-cyan-500 opacity-60'
-                        }`}></span>
-                        <span className="truncate">{s}</span>
+                        
+                        {/* 🌟 极致视觉：根据不同类型渲染酷炫前缀图标 */}
+                        <div className="mr-3 mt-1 shrink-0 text-lg">
+                            {s.type === 'category' && (s.value === 'function' ? '⚡' : '🚀')}
+                            {s.type === 'model' && (s.value === 'container' ? <span className="text-purple-400">📦</span> : <span className="text-yellow-400">ƒx</span>)}
+                            {s.type === 'column' && <span className="text-cyan-400 text-sm">📍</span>}
+                        </div>
+
+                        <div className="flex flex-col overflow-hidden">
+                            <span className={`text-sm font-mono truncate ${i === focusedIndex ? 'text-white font-bold' : 'text-gray-200'}`}>
+                                {s.text}
+                            </span>
+                            {s.desc && (
+                                <span className={`text-[10px] mt-0.5 truncate ${i === focusedIndex ? 'text-cyan-200' : 'text-gray-500'}`}>
+                                    {s.desc}
+                                </span>
+                            )}
+                        </div>
                     </li>
                 ))}
             </ul>, document.body
@@ -264,7 +323,7 @@ const FormulaCellEditor = (props: any) => {
         <div ref={containerRef} className={`flex items-center w-full h-full px-2 transition-all duration-300 ease-out box-border ${isFormulaMode ? 'bg-geo-dark shadow-[inset_0_0_0_2px_#06b6d4]' : 'bg-[#1f2937] shadow-[inset_0_0_0_1px_#3b82f6]' }`}
             style={{ width: isFormulaMode ? Math.max(defaultCellWidth, 300) : defaultCellWidth, height: 40, borderRadius: '4px' }}>
             {isFormulaMode && <span className="text-cyan-400 font-mono text-sm mr-2 font-bold select-none shrink-0 drop-shadow-[0_0_4px_rgba(6,182,212,0.8)]">ƒx</span>}
-            <input ref={inputRef} value={value} onChange={handleChange} placeholder={isFormulaMode ? "等待输入模型或参数..." : "输入数值..."} className={`w-full h-full bg-transparent outline-none font-mono text-sm border-none shadow-none ${isFormulaMode ? 'text-cyan-50' : 'text-gray-100'}`} style={{ minWidth: 0 }} />
+            <input ref={inputRef} value={value} onChange={handleChange} placeholder={isFormulaMode ? "选择运算模式或输入模型..." : "输入数值..."} className={`w-full h-full bg-transparent outline-none font-mono text-sm border-none shadow-none ${isFormulaMode ? 'text-cyan-50' : 'text-gray-100'}`} style={{ minWidth: 0 }} />
             <DropdownPortal />
         </div>
     );
@@ -285,30 +344,22 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
     // 记录当前选中的行索引，用于删除行
     const [selectedRecordId, setSelectedRecordId] = useState<string | number | null>(null);
     // 🌟 1. 新增：存储后端真实模型列表的状态
-    const [modelList, setModelList] = useState<string[]>([]);
+    const [modelList, setModelList] = useState<any[]>([]); // 🌟 这里现在存的是完整模型对象数组
     
     // 🌟 2. 新增：组件初始化时，向后端请求活跃模型列表
     useEffect(() => {
         const fetchModels = async () => {
             try {
-                // 调用我们在 geoService 中写好的方法
                 const res = await apiClient.get('/analysis/models');
-                
-                // 严格按照你后端的结构 { code: 200, data: models } 解析
                 if (res && res.data.code === 200 && Array.isArray(res.data.data)) {
-                    // 提取出所有的 modelName (如 "LSI_AHP") 供编辑器补全使用
-                    const modelNames = res.data.data.map((model: any) => model.modelName);
-                    setModelList(modelNames);
-                    console.log("✅ 成功拉取真实模型列表:", modelNames);
+                    setModelList(res.data.data); // 🌟 保留完整对象给编辑器
                 }
             } catch (error) {
                 console.error("❌ 获取真实模型列表失败:", error);
-                // 兜底方案：如果请求失败，留几个默认的防止功能直接瘫痪
-                setModelList(['DBSCAN_SPATIAL_CLUSTERING', 'KMEANS_CLUSTERING']);
             }
         };
         fetchModels();
-    }, []); // 空依赖数组，确保只加载一次 
+    }, []);
 
     // data 现在直接是数组了，不需要判断 FeatureCollection 
     useEffect(() => {
@@ -791,6 +842,20 @@ const DataPivot: React.FC<DataPivotProps> = ({ data, fileName, fileId, paginatio
                                 modelName: modelName,
                                 rawArgs: processedArgs 
                             });
+                            
+                            // ==========================================
+                            // 🌟 核心突破：沙箱物理产物拦截！(双轨响应)
+                            // ==========================================
+                            if (responseData.type === 'global_file') {
+                                // 这是重量级沙箱模型，生成了一个物理文件
+                                node.setDataValue(field!, `🔗 [产物] ${responseData.newFileName}`);
+                                message.success({
+                                    content: `专业空间建模完成！已生成物理图层: ${responseData.newFileName}。请在左侧文件树中刷新查看。`,
+                                    duration: 6
+                                });
+                                // 🌟 直接 return，跳过下方对 resultData 的解析，完美闭环！
+                                return; 
+                            }
 
                             const resultData = responseData.resultData;
                             
